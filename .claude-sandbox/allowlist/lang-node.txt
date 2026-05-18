@@ -1,0 +1,4 @@
+# Node.js / npm / yarn pack
+registry.npmjs.org
+registry.yarnpkg.com
+*.npmjs.org

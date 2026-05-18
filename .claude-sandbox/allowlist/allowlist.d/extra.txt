@@ -1,0 +1,6 @@
+# プロジェクト固有の allowlist (commit OK)
+# 1 行 1 ドメイン、`*.example.com` でサフィックスマッチ、`#` コメント。
+#
+# 例:
+# api.sendgrid.com
+# *.sendgrid.net

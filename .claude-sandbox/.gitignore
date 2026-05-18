@@ -1,0 +1,14 @@
+# Claude Code Sandbox - 機密 / 自動生成ファイル
+sandbox.config
+.runtime.env
+docker-compose.override.yml
+
+proxy/certs/*
+!proxy/certs/.gitkeep
+
+volumes/
+
+auth/claude-config/*
+!auth/claude-config/.gitkeep
+auth/claude-config.json
+!auth/.gitkeep

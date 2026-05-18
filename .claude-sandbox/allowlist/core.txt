@@ -1,0 +1,28 @@
+# Claude Code Sandbox - Core Allowlist
+# これらは全プロジェクトで必須。削除しないこと。
+# 1 行 1 ドメイン、先頭 `*.` でサフィックスマッチ、`#` コメント可。
+
+# --- Anthropic Claude ---
+api.anthropic.com
+statsig.anthropic.com
+console.anthropic.com
+# claude login / OAuth フロー
+platform.claude.com
+claude.ai
+# MCP サーバー接続
+mcp-proxy.anthropic.com
+
+# --- Claude Code テレメトリ / エラーレポート ---
+*.ingest.sentry.io
+sentry.io
+
+# --- GitHub (git, gh CLI, gh actions, raw) ---
+github.com
+api.github.com
+codeload.github.com
+objects.githubusercontent.com
+raw.githubusercontent.com
+*.githubusercontent.com
+
+# --- Claude Code CLI 自身の更新 ---
+registry.npmjs.org

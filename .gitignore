@@ -1,0 +1,16 @@
+.idea
+/.env
+/node_modules/
+/.venv/
+/.pnpm-store/
+
+# Claude Code Sandbox - 機密 / 自動生成 (詳細は .claude-sandbox/.gitignore)
+.claude-sandbox/sandbox.config
+.claude-sandbox/.runtime.env
+.claude-sandbox/docker-compose.override.yml
+.claude-sandbox/proxy/certs/*
+!.claude-sandbox/proxy/certs/.gitkeep
+.claude-sandbox/volumes/
+.claude-sandbox/auth/claude-config/*
+!.claude-sandbox/auth/claude-config/.gitkeep
+.claude-sandbox/auth/claude-config.json

@@ -1,0 +1,7 @@
+# Python / pip pack
+pypi.org
+files.pythonhosted.org
+*.pythonhosted.org
+# uv 公式インストーラ (build 時 + uv self update 用)
+astral.sh
+*.astral.sh

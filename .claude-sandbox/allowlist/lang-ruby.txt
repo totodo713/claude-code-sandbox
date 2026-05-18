@@ -1,0 +1,4 @@
+# Ruby / Bundler pack
+rubygems.org
+index.rubygems.org
+*.rubygems.org

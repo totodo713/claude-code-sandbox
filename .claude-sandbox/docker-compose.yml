@@ -1,0 +1,100 @@
+name: ${PROJECT_NAME:-claude-sandbox}
+
+services:
+  egress-proxy:
+    image: mitmproxy/mitmproxy:latest
+    container_name: ${PROJECT_NAME:-claude-sandbox}-egress-proxy
+    restart: unless-stopped
+    command:
+      - mitmdump
+      - --listen-port=${PROXY_LISTEN_PORT:-8080}
+      - --set=block_global=false
+      - --set=confdir=/home/mitmproxy/.mitmproxy
+      - -s=/addons/allowlist_addon.py
+    environment:
+      ALLOWLIST_DIR: /allowlist
+      LANG_PACK: ${LANG_PACK:-}
+      BLOCK_ON_VIOLATION: ${BLOCK_ON_VIOLATION:-true}
+    volumes:
+      - ./proxy/allowlist_addon.py:/addons/allowlist_addon.py:ro
+      - ./allowlist:/allowlist:ro
+      - ./proxy/certs:/home/mitmproxy/.mitmproxy
+      - ./volumes/proxy-data:/data
+    networks:
+      - egress
+      - sandbox-internal
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem"]
+      interval: 2s
+      timeout: 1s
+      retries: 30
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+      args:
+        UID: ${AGENT_USER_UID:-1000}
+        GID: ${AGENT_USER_GID:-1000}
+        LANG_PACK: ${LANG_PACK:-}
+        RUBY_VERSION: ${RUBY_VERSION:-}
+        NODE_VERSION: ${NODE_VERSION:-}
+        PYTHON_VERSION: ${PYTHON_VERSION:-}
+        PKG_TOOL_PYTHON: ${PKG_TOOL_PYTHON:-uv}
+        PKG_TOOL_NODE: ${PKG_TOOL_NODE:-npm}
+    image: ${PROJECT_NAME:-claude-sandbox}-agent:latest
+    container_name: ${PROJECT_NAME:-claude-sandbox}-agent
+    depends_on:
+      egress-proxy:
+        condition: service_healthy
+    environment:
+      HTTP_PROXY: http://egress-proxy:${PROXY_LISTEN_PORT:-8080}
+      HTTPS_PROXY: http://egress-proxy:${PROXY_LISTEN_PORT:-8080}
+      http_proxy: http://egress-proxy:${PROXY_LISTEN_PORT:-8080}
+      https_proxy: http://egress-proxy:${PROXY_LISTEN_PORT:-8080}
+      NO_PROXY: localhost,127.0.0.1,egress-proxy
+      no_proxy: localhost,127.0.0.1,egress-proxy
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    env_file:
+      - .runtime.env
+    volumes:
+      - ${HOST_REPO_PATH:-..}:/workspace
+      # gem / bundler の保存先。/workspace (ホストリポ) を汚さず、run.sh を
+      # またいで永続させ、native extension をコンテナ内に隔離する。
+      - bundle-cache:/opt/bundle
+      # node_modules を /workspace の bind mount の上に named volume で重ねる。
+      # ホストリポに node_modules を作らず、native binding をコンテナ内に隔離し、
+      # run.sh をまたいで永続させる。monorepo のネスト node_modules は未対応。
+      - node-modules-cache:/workspace/node_modules
+      # npm の tarball キャッシュ。再 install を高速化する。
+      - npm-cache:/home/agent/.npm
+      # Python venv (.venv) も同じ思想で named volume を重ねる。
+      # uv のデフォルト位置に揃え、IDE 統合 (VS Code 等) の自動検出を維持する。
+      - venv-cache:/workspace/.venv
+      # uv の tarball / wheel キャッシュ。再 sync を高速化する。
+      - uv-cache:/home/agent/.cache/uv
+      # pip キャッシュ (PKG_TOOL_PYTHON=pip のとき効く)。
+      - pip-cache:/home/agent/.cache/pip
+      # pnpm の content-addressable store (PKG_TOOL_NODE=pnpm のとき効く)。
+      - pnpm-store-cache:/home/agent/.local/share/pnpm
+    working_dir: /workspace
+    networks:
+      - sandbox-internal
+    tty: true
+    stdin_open: true
+
+networks:
+  egress:
+    driver: bridge
+  sandbox-internal:
+    driver: bridge
+    internal: true
+
+volumes:
+  bundle-cache:
+  node-modules-cache:
+  npm-cache:
+  venv-cache:
+  uv-cache:
+  pip-cache:
+  pnpm-store-cache:

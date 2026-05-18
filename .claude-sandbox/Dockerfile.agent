@@ -1,0 +1,204 @@
+# syntax=docker/dockerfile:1.6
+#
+# claude-code CLI は公式ネイティブインストーラで /usr/local/bin/claude に配置する
+# (自己完結バイナリ。実行時に Node 不要。プロジェクト実行系と完全に独立)。
+# /opt/runtimes/<lang>  … プロジェクト実行系。LANG_PACK で選んだ言語をここに入れ、
+#                         PATH の先頭に置く。
+#
+FROM debian:bookworm-slim
+
+ARG UID=1000
+ARG GID=1000
+ARG LANG_PACK=
+# プロジェクト実行系のバージョン (LANG_PACK に該当言語を含む場合のみ使用)。
+ARG NODE_VERSION=
+ARG RUBY_VERSION=
+ARG PYTHON_VERSION=
+# 言語別パッケージマネージャ (将来 pnpm / yarn / poetry / pip 等を足す枠)。
+# 今は python=uv, node=npm のみ実装。
+ARG PKG_TOOL_PYTHON=uv
+ARG PKG_TOOL_NODE=npm
+
+ENV DEBIAN_FRONTEND=noninteractive
+# corepack (pnpm/yarn 用 shim) の作業ディレクトリを共有可能な場所に置き、
+# build 時 root で展開した内容を実行時 agent から読めるようにする。
+ENV COREPACK_HOME=/opt/corepack
+
+# 共通の土台
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        ca-certificates curl git openssh-client gnupg sudo less jq procps \
+        xz-utils libstdc++6 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Node バージョン解決ヘルパ: spec (X / X.Y / X.Y.Z / vX.Y.Z / lts / lts/*) を
+# 正確な X.Y.Z に解決する。プロジェクト Node の導入で使う。
+COPY <<'EOF' /usr/local/bin/_resolve-node
+#!/bin/sh
+set -eu
+spec="${1#v}"
+case "$spec" in
+  [0-9]*.[0-9]*.[0-9]*) echo "$spec"; exit 0 ;;
+esac
+idx="$(curl -fsSL https://nodejs.org/dist/index.json)"
+case "${spec:-lts}" in
+  lts|lts/*) f='[.[]|select(.lts!=false)][0].version' ;;
+  *)         f="[.[]|select(.version|ltrimstr(\"v\")|startswith(\"${spec}.\"))][0].version" ;;
+esac
+v="$(echo "$idx" | jq -r "$f" | sed 's/^v//')"
+[ -n "$v" ] && [ "$v" != "null" ] || { echo "Node バージョンを解決できません: $spec" >&2; exit 1; }
+echo "$v"
+EOF
+RUN chmod +x /usr/local/bin/_resolve-node
+
+# Python バージョン解決ヘルパ: X.Y.Z はそのまま、X.Y は pyenv の definitions
+# から該当マイナーの最新パッチを返す。uv が生成する `.python-version` は
+# `3.13` のような major.minor 形式なのでこの解決を挟む。
+# 第2引数は pyenv の clone 先 (default: /tmp/pyenv)。
+COPY <<'EOF' /usr/local/bin/_resolve-python
+#!/bin/sh
+set -eu
+spec="$1"
+pyenv_dir="${2:-/tmp/pyenv}"
+case "$spec" in
+  [0-9]*.[0-9]*.[0-9]*) echo "$spec"; exit 0 ;;
+  [0-9]*.[0-9]*) : ;;
+  *) echo "Python バージョン形式が認識できません: $spec (X.Y か X.Y.Z で指定)" >&2; exit 1 ;;
+esac
+defs_dir="${pyenv_dir}/plugins/python-build/share/python-build"
+[ -d "$defs_dir" ] || { echo "pyenv definitions が見つかりません: $defs_dir" >&2; exit 1; }
+# 開発版 (a/b/rc) や free-threaded (末尾 t) を除いた純粋な X.Y.Z のみ拾う。
+v="$(ls "$defs_dir" | grep -E "^${spec}\.[0-9]+$" | sort -V | tail -n1)"
+[ -n "$v" ] || { echo "Python バージョンを解決できません: $spec (pyenv に該当 definition なし)" >&2; exit 1; }
+echo "$v"
+EOF
+RUN chmod +x /usr/local/bin/_resolve-python
+
+# ── Claude Code CLI 本体を公式ネイティブインストーラで導入 ──
+# 配布物は Node 内蔵の自己完結バイナリ。実行時に Node 不要なので、プロジェクトが
+# 別 Node を PATH 先頭に置いても無傷。インストーラは ~/.local/bin/claude を
+# バージョン別実体へのシンボリックリンクとして置くので、実体を /usr/local/bin に
+# 配置することで非 root の agent ユーザーからもアクセス可能にする。
+RUN set -eu; \
+    curl -fsSL https://claude.ai/install.sh | bash; \
+    install -m 755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude; \
+    rm -rf /root/.local
+
+# ── プロジェクト実行系 (langpack) を /opt/runtimes/<lang> に導入 ──
+# ▼▼ 新しい言語を足すときは、この case に同じ形のブランチを 1 つ足す ▼▼
+#   契約: $<LANG>_VERSION を /opt/runtimes/<lang> に入れ、bin/ に実行ファイルを置く。
+RUN set -eu; \
+    for pack in $(echo "$LANG_PACK" | tr ',' ' '); do \
+      case "$pack" in \
+        node) \
+          [ -n "$NODE_VERSION" ] || { echo "LANG_PACK に node があるが NODE_VERSION が空" >&2; exit 1; }; \
+          ver="$(_resolve-node "${NODE_VERSION}")"; \
+          arch="$(dpkg --print-architecture)"; \
+          case "$arch" in amd64) na=x64 ;; arm64) na=arm64 ;; *) echo "unsupported arch: $arch" >&2; exit 1 ;; esac; \
+          mkdir -p /opt/runtimes/node; \
+          curl -fsSL "https://nodejs.org/dist/v${ver}/node-v${ver}-linux-${na}.tar.xz" \
+            | tar -xJ -C /opt/runtimes/node --strip-components=1; \
+          case "${PKG_TOOL_NODE:-npm}" in \
+            npm) : ;; \
+            pnpm) \
+              mkdir -p /opt/corepack; \
+              export PATH="/opt/runtimes/node/bin:$PATH"; \
+              corepack enable pnpm; \
+              corepack prepare pnpm@latest --activate; \
+              chown -R "$UID:$GID" /opt/corepack ;; \
+            *) echo "未対応の PKG_TOOL_NODE=$PKG_TOOL_NODE (今は 'npm' / 'pnpm' のみ)" >&2; exit 1 ;; \
+          esac ;; \
+        ruby) \
+          [ -n "$RUBY_VERSION" ] || { echo "LANG_PACK に ruby があるが RUBY_VERSION が空" >&2; exit 1; }; \
+          apt-get update && apt-get install -y --no-install-recommends \
+            build-essential default-libmysqlclient-dev pkg-config \
+            autoconf patch libssl-dev libyaml-dev libreadline-dev zlib1g-dev \
+            libgmp-dev libncurses-dev libffi-dev libgdbm-dev libdb-dev; \
+          rm -rf /var/lib/apt/lists/*; \
+          git clone --depth 1 https://github.com/rbenv/ruby-build.git /tmp/ruby-build; \
+          /tmp/ruby-build/bin/ruby-build "$RUBY_VERSION" /opt/runtimes/ruby; \
+          rm -rf /tmp/ruby-build ;; \
+        python) \
+          [ -n "$PYTHON_VERSION" ] || { echo "LANG_PACK に python があるが PYTHON_VERSION が空" >&2; exit 1; }; \
+          apt-get update && apt-get install -y --no-install-recommends \
+            build-essential libssl-dev libffi-dev zlib1g-dev libbz2-dev \
+            libreadline-dev libsqlite3-dev liblzma-dev libncurses-dev \
+            tk-dev uuid-dev libgdbm-dev libdb-dev; \
+          rm -rf /var/lib/apt/lists/*; \
+          git clone --depth 1 https://github.com/pyenv/pyenv.git /tmp/pyenv; \
+          ver="$(_resolve-python "${PYTHON_VERSION}" /tmp/pyenv)"; \
+          echo "Python ${PYTHON_VERSION} を ${ver} に解決"; \
+          /tmp/pyenv/plugins/python-build/bin/python-build "$ver" /opt/runtimes/python; \
+          rm -rf /tmp/pyenv; \
+          case "${PKG_TOOL_PYTHON:-uv}" in \
+            uv) \
+              curl -LsSf https://astral.sh/uv/install.sh | sh; \
+              install -m 755 "$(readlink -f /root/.local/bin/uv)"  /usr/local/bin/uv; \
+              install -m 755 "$(readlink -f /root/.local/bin/uvx)" /usr/local/bin/uvx; \
+              rm -rf /root/.local ;; \
+            pip) : ;; \
+            *) echo "未対応の PKG_TOOL_PYTHON=$PKG_TOOL_PYTHON (今は 'uv' / 'pip' のみ)" >&2; exit 1 ;; \
+          esac ;; \
+        ""|none) : ;; \
+        *) echo "Unknown LANG_PACK entry: $pack" >&2; exit 1 ;; \
+      esac; \
+    done; \
+    rm -f /usr/local/bin/_resolve-node /usr/local/bin/_resolve-python
+
+# mitmproxy CA を信頼チェーンに追加 (setup.sh が事前に生成)
+COPY proxy/certs/ /tmp/sandbox-ca/
+RUN set -eu; \
+    if [ -f /tmp/sandbox-ca/mitmproxy-ca-cert.pem ]; then \
+      install -m 644 /tmp/sandbox-ca/mitmproxy-ca-cert.pem \
+        /usr/local/share/ca-certificates/mitmproxy.crt; \
+      update-ca-certificates; \
+    else \
+      echo "ERROR: proxy/certs/mitmproxy-ca-cert.pem が見つかりません。setup.sh を先に実行してください。" >&2; \
+      exit 1; \
+    fi; \
+    rm -rf /tmp/sandbox-ca
+
+# ツール別 CA バンドル参照 (SSL Bump 用)
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt \
+    GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
+    BUNDLE_SSL_CA_CERT=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    GOSUMDB=off
+
+# 非 root user (UID/GID はホストと一致させて bind mount の権限問題を回避)
+RUN set -eu; \
+    if getent group "$GID" >/dev/null; then \
+      groupmod -n agent "$(getent group "$GID" | cut -d: -f1)" || true; \
+    else \
+      groupadd -g "$GID" agent; \
+    fi; \
+    if getent passwd "$UID" >/dev/null; then \
+      usermod -l agent -d /home/agent -m -g "$GID" "$(getent passwd "$UID" | cut -d: -f1)" || true; \
+    else \
+      useradd -m -u "$UID" -g "$GID" -s /bin/bash agent; \
+    fi; \
+    echo 'agent ALL=(ALL) NOPASSWD: /usr/sbin/update-ca-certificates' >> /etc/sudoers.d/agent
+
+# 依存パッケージの保存先 + プロジェクト実行系を PATH 先頭に。
+ENV GEM_HOME=/opt/bundle \
+    BUNDLE_PATH=/opt/bundle \
+    BUNDLE_APP_CONFIG=/opt/bundle/.config \
+    PATH=/opt/runtimes/node/bin:/opt/runtimes/ruby/bin:/opt/runtimes/python/bin:/opt/bundle/bin:$PATH
+RUN mkdir -p /opt/bundle && chown -R "$UID:$GID" /opt/bundle
+# 言語別パッケージ保存先・キャッシュ用の named volume のマウントポイント。
+# 空ディレクトリの所有権が volume 初回マウント時に継承され、agent ユーザーから
+# 書き込めるようになる (gem の /opt/bundle と同じ手法)。
+RUN mkdir -p /workspace/node_modules        /home/agent/.npm \
+              /workspace/.venv              /home/agent/.cache/uv \
+              /home/agent/.cache/pip        /home/agent/.local/share/pnpm \
+ && chown -R "$UID:$GID" /workspace/node_modules        /home/agent/.npm \
+                         /workspace/.venv              /home/agent/.cache/uv \
+                         /home/agent/.cache/pip        /home/agent/.local/share/pnpm
+
+USER agent
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]

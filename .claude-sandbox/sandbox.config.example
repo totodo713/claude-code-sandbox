@@ -1,0 +1,60 @@
+# ============================================================
+# Claude Code Sandbox - 設定ファイル
+# 編集後にこのファイルを `sandbox.config` という名前で保存してください。
+# (`setup.sh` を実行すると対話で自動生成されます)
+# ============================================================
+
+# ---- プロジェクト ----
+PROJECT_NAME=__PROJECT_NAME__
+# .claude-sandbox から見たリポジトリ root の相対 (or 絶対) パス
+HOST_REPO_PATH=..
+
+# ---- 認証モード: A | B | C ----
+# A: ホストの認証情報を初期化時にサンドボックス内へコピーして流用
+# B: コンテナ内で `claude login` (専用 volume に永続化)
+# C: ANTHROPIC_API_KEY を直接利用
+# いずれも実行時構成は同一 (~/.claude と ~/.claude.json をサンドボックス内に永続化)
+CLAUDE_AUTH_MODE=__CLAUDE_AUTH_MODE__
+
+# Mode A 時のみ参照 (コピー元となるホストの ~/.claude パス)
+HOST_CLAUDE_DIR=__HOST_CLAUDE_DIR__
+
+# Mode C 時のみ参照 (空でも OK)
+ANTHROPIC_API_KEY=__ANTHROPIC_API_KEY__
+
+# ---- 言語ランタイム (カンマ区切り複数可: ruby,node,python) ----
+# ここで選んだ言語の実行系を /opt/runtimes/<lang> に導入し、PATH 先頭に置く。
+LANG_PACK=__LANG_PACK__
+
+# プロジェクト実行系のバージョン (LANG_PACK に該当言語を含む場合のみ参照)。
+# LANG_PACK に含む言語は必ずバージョン指定が要る。setup.sh が
+#   ruby   : .ruby-version → Gemfile
+#   node   : .nvmrc → .node-version → package.json engines.node
+#   python : .python-version → runtime.txt → pyproject.toml
+# の順で自動検出する。
+#   node   : X / X.Y / X.Y.Z / lts いずれも可
+#   python : X.Y / X.Y.Z 可 (X.Y は pyenv definitions から最新パッチを解決)
+#   ruby   : X.Y.Z (完全指定が必要)
+RUBY_VERSION=__RUBY_VERSION__
+NODE_VERSION=__NODE_VERSION__
+PYTHON_VERSION=__PYTHON_VERSION__
+
+# ---- 言語別パッケージマネージャ (将来の差し替え枠) ----
+# 現状サポート: python=uv, node=npm。pnpm/yarn/poetry/pip 等は未実装で、
+# Dockerfile.agent の case 分岐に枝を足せば対応できる構造になっている。
+# Ruby は bundle 固定なので変数は持たない。
+PKG_TOOL_PYTHON=__PKG_TOOL_PYTHON__
+PKG_TOOL_NODE=__PKG_TOOL_NODE__
+
+# ---- allowlist ----
+# true: 違反リクエストを 502 で遮断 / false: 警告ログのみ通過
+BLOCK_ON_VIOLATION=true
+
+# ---- agent コンテナへ渡すホスト env (カンマ区切り) ----
+# 例: APP_ENV,DB_HOST,DB_PORT,DB_USERNAME,DB_PASSWORD
+PASSTHROUGH_ENV=__PASSTHROUGH_ENV__
+
+# ---- proxy / container ----
+PROXY_LISTEN_PORT=8080
+AGENT_USER_UID=__AGENT_USER_UID__
+AGENT_USER_GID=__AGENT_USER_GID__
