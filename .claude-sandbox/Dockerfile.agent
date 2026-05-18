@@ -14,8 +14,8 @@ ARG LANG_PACK=
 ARG NODE_VERSION=
 ARG RUBY_VERSION=
 ARG PYTHON_VERSION=
-# 言語別パッケージマネージャ (将来 pnpm / yarn / poetry / pip 等を足す枠)。
-# 今は python=uv, node=npm のみ実装。
+# 言語別パッケージマネージャ (将来 poetry / pip 等を足す枠)。
+# 現状: python={uv,pip}, node={npm,pnpm,yarn,bun}。
 ARG PKG_TOOL_PYTHON=uv
 ARG PKG_TOOL_NODE=npm
 
@@ -23,6 +23,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # corepack (pnpm/yarn 用 shim) の作業ディレクトリを共有可能な場所に置き、
 # build 時 root で展開した内容を実行時 agent から読めるようにする。
 ENV COREPACK_HOME=/opt/corepack
+# bun の install 先 (PKG_TOOL_NODE=bun のとき使用)。/opt 配下に置いて
+# 全ユーザから読めるようにし、PATH を通す (下の PATH 設定で /opt/bun/bin を追加)。
+ENV BUN_INSTALL=/opt/bun
 
 # 共通の土台
 RUN apt-get update \
@@ -106,7 +109,20 @@ RUN set -eu; \
               corepack enable pnpm; \
               corepack prepare pnpm@latest --activate; \
               chown -R "$UID:$GID" /opt/corepack ;; \
-            *) echo "未対応の PKG_TOOL_NODE=$PKG_TOOL_NODE (今は 'npm' / 'pnpm' のみ)" >&2; exit 1 ;; \
+            yarn) \
+              mkdir -p /opt/corepack; \
+              export PATH="/opt/runtimes/node/bin:$PATH"; \
+              corepack enable yarn; \
+              corepack prepare yarn@stable --activate; \
+              chown -R "$UID:$GID" /opt/corepack ;; \
+            bun) \
+              apt-get update && apt-get install -y --no-install-recommends unzip; \
+              rm -rf /var/lib/apt/lists/*; \
+              mkdir -p /opt/bun; \
+              curl -fsSL https://bun.sh/install | bash; \
+              chmod -R a+rX /opt/bun; \
+              chown -R "$UID:$GID" /opt/bun ;; \
+            *) echo "未対応の PKG_TOOL_NODE=$PKG_TOOL_NODE (今は 'npm' / 'pnpm' / 'yarn' / 'bun' のみ)" >&2; exit 1 ;; \
           esac ;; \
         ruby) \
           [ -n "$RUBY_VERSION" ] || { echo "LANG_PACK に ruby があるが RUBY_VERSION が空" >&2; exit 1; }; \
@@ -186,7 +202,7 @@ RUN set -eu; \
 ENV GEM_HOME=/opt/bundle \
     BUNDLE_PATH=/opt/bundle \
     BUNDLE_APP_CONFIG=/opt/bundle/.config \
-    PATH=/opt/runtimes/node/bin:/opt/runtimes/ruby/bin:/opt/runtimes/python/bin:/opt/bundle/bin:$PATH
+    PATH=/opt/runtimes/node/bin:/opt/runtimes/ruby/bin:/opt/runtimes/python/bin:/opt/bun/bin:/opt/bundle/bin:$PATH
 RUN mkdir -p /opt/bundle && chown -R "$UID:$GID" /opt/bundle
 # 言語別パッケージ保存先・キャッシュ用の named volume のマウントポイント。
 # 空ディレクトリの所有権が volume 初回マウント時に継承され、agent ユーザーから
@@ -194,9 +210,11 @@ RUN mkdir -p /opt/bundle && chown -R "$UID:$GID" /opt/bundle
 RUN mkdir -p /workspace/node_modules        /home/agent/.npm \
               /workspace/.venv              /home/agent/.cache/uv \
               /home/agent/.cache/pip        /home/agent/.local/share/pnpm \
+              /home/agent/.yarn             /home/agent/.bun/install/cache \
  && chown -R "$UID:$GID" /workspace/node_modules        /home/agent/.npm \
                          /workspace/.venv              /home/agent/.cache/uv \
-                         /home/agent/.cache/pip        /home/agent/.local/share/pnpm
+                         /home/agent/.cache/pip        /home/agent/.local/share/pnpm \
+                         /home/agent/.yarn             /home/agent/.bun
 
 USER agent
 WORKDIR /workspace

@@ -176,11 +176,13 @@ detect_pkg_tool_python() {
 detect_pkg_tool_node() {
   local repo_root v
   repo_root=$(cd "$SCRIPT_DIR/.." && pwd)
+  [ -f "$repo_root/bun.lockb" ]      && { printf "bun";  return; }
+  [ -f "$repo_root/bun.lock" ]       && { printf "bun";  return; }
   [ -f "$repo_root/pnpm-lock.yaml" ] && { printf "pnpm"; return; }
   [ -f "$repo_root/yarn.lock" ]      && { printf "yarn"; return; }
   if [ -f "$repo_root/package.json" ]; then
     v=$(grep -oE '"packageManager"[[:space:]]*:[[:space:]]*"[^"]+"' "$repo_root/package.json" 2>/dev/null \
-         | grep -oE '(pnpm|yarn|npm)' | head -n1) || true
+         | grep -oE '(pnpm|yarn|bun|npm)' | head -n1) || true
     [ -n "$v" ] && { printf "%s" "$v"; return; }
   fi
   printf "npm"
@@ -245,7 +247,7 @@ gather_inputs() {
       default_node=$(detect_node_version)
       default_pkg_node=$(detect_pkg_tool_node)
       NODE_VERSION=$(ask "Node バージョン (.nvmrc/.node-version/package.json から検出、空=lts)" "${default_node:-lts}")
-      PKG_TOOL_NODE=$(ask "Node パッケージマネージャ (npm/pnpm 実装済)" "$default_pkg_node")
+      PKG_TOOL_NODE=$(ask "Node パッケージマネージャ (npm/pnpm/yarn/bun 実装済)" "$default_pkg_node")
       ;;
   esac
   case ",${LANG_PACK}," in

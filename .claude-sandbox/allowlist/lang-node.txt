@@ -1,4 +1,5 @@
-# Node.js / npm / yarn pack
+# Node.js / npm / pnpm / yarn / bun pack
+# (bun upgrade と Yarn Berry のプラグインは github.com 経由 — core.txt 側で許可済み)
 registry.npmjs.org
 registry.yarnpkg.com
 *.npmjs.org

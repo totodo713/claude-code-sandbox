@@ -40,8 +40,8 @@ NODE_VERSION=__NODE_VERSION__
 PYTHON_VERSION=__PYTHON_VERSION__
 
 # ---- 言語別パッケージマネージャ (将来の差し替え枠) ----
-# 現状サポート: python=uv, node=npm。pnpm/yarn/poetry/pip 等は未実装で、
-# Dockerfile.agent の case 分岐に枝を足せば対応できる構造になっている。
+# 現状サポート: python={uv,pip}, node={npm,pnpm,yarn,bun}。poetry/pipenv 等は
+# 未実装で、Dockerfile.agent の case 分岐に枝を足せば対応できる構造になっている。
 # Ruby は bundle 固定なので変数は持たない。
 PKG_TOOL_PYTHON=__PKG_TOOL_PYTHON__
 PKG_TOOL_NODE=__PKG_TOOL_NODE__

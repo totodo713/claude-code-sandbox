@@ -167,9 +167,11 @@ NODE_VERSION=14.21.3         # プロジェクトが要求するバージョン
 | 言語 | volume 名 | マウント先 | 内容 |
 |---|---|---|---|
 | Ruby | `bundle-cache` | `/opt/bundle` | gem (GEM_HOME / BUNDLE_PATH) |
-| Node | `node-modules-cache` | `/workspace/node_modules` | `npm install` / `pnpm install` の出力 |
+| Node | `node-modules-cache` | `/workspace/node_modules` | `npm install` / `pnpm install` / `yarn install` / `bun install` の出力 |
 | Node | `npm-cache` | `/home/agent/.npm` | npm の tarball キャッシュ |
 | Node | `pnpm-store-cache` | `/home/agent/.local/share/pnpm` | pnpm の content-addressable store |
+| Node | `yarn-cache` | `/home/agent/.yarn` | Yarn (Berry) のグローバルキャッシュ / config |
+| Node | `bun-install-cache` | `/home/agent/.bun/install/cache` | bun の install キャッシュ |
 | Python | `venv-cache` | `/workspace/.venv` | `uv sync` / `python -m venv` で作る venv |
 | Python | `uv-cache` | `/home/agent/.cache/uv` | uv の wheel / tarball キャッシュ |
 | Python | `pip-cache` | `/home/agent/.cache/pip` | pip の wheel キャッシュ |
@@ -228,12 +230,13 @@ Ruby (bundle) は `/opt/bundle` というコンテナ専用パスにインスト
 | 変数 | 実装済 | 自動検出ソース | 将来枠 |
 |---|---|---|---|
 | `PKG_TOOL_PYTHON` | `uv` / `pip` | `uv.lock` → uv / `requirements.txt` → pip | `poetry` / `pipenv` |
-| `PKG_TOOL_NODE` | `npm` / `pnpm` | `pnpm-lock.yaml` / `package.json` の `packageManager` → pnpm、それ以外 → npm | `yarn` |
+| `PKG_TOOL_NODE` | `npm` / `pnpm` / `yarn` / `bun` | `bun.lock(b)` → bun / `pnpm-lock.yaml` → pnpm / `yarn.lock` → yarn / `package.json` の `packageManager` → 該当ツール、それ以外 → npm | — |
 
 `Dockerfile.agent` の各言語ブランチに `case "$PKG_TOOL_<LANG>" in ... esac`
 の枠があり、新ツール対応はこの case にブランチを足すだけ。実装枠外を指定すると
-build 時にエラーになる。yarn / poetry / pipenv 等を足したい時は、既存の `uv` /
-`pnpm` ブランチを参考に同じパターンでブランチを追加する。
+build 時にエラーになる。poetry / pipenv 等を足したい時は、既存の `uv` /
+`pnpm` / `yarn` (corepack 経由) や `bun` (curl install) ブランチを参考に同じ
+パターンでブランチを追加する。
 
 volume の中身は `docker volume inspect` や、コンテナ内 `ls /opt/bundle` で確認可。
 リセットしたい場合:
@@ -250,7 +253,7 @@ docker volume rm <project>_node-modules-cache
 allowlist/
 ├── core.txt                 # 必須 (anthropic, github, npm)
 ├── lang-ruby.txt            # gemfile/bundler
-├── lang-node.txt            # npm/yarn
+├── lang-node.txt            # npm/pnpm/yarn/bun
 ├── lang-python.txt          # pypi
 └── allowlist.d/
     └── extra.txt            # プロジェクト固有 (commit OK)

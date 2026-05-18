@@ -109,6 +109,12 @@ if [ -n "${LANG_PACK:-}" ]; then
         pnpm) check "agent: pnpm が PATH にある" \
                 docker compose --env-file sandbox.config run --rm -T agent \
                   bash -c 'command -v pnpm' ;;
+        yarn) check "agent: yarn が PATH にある" \
+                docker compose --env-file sandbox.config run --rm -T agent \
+                  bash -c 'command -v yarn' ;;
+        bun)  check "agent: bun が PATH にある" \
+                docker compose --env-file sandbox.config run --rm -T agent \
+                  bash -c 'command -v bun' ;;
       esac ;;
   esac
   case ",${LANG_PACK}," in
