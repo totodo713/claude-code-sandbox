@@ -48,9 +48,3 @@ Full sandbox documentation, including auth modes (A/B/C), volume layout, trouble
 ## Sandbox architecture in one paragraph
 
 `docker-compose.yml` defines two services on an `internal: true` network: the `agent` container (where `claude` and all child processes run, with no direct internet route) and an `egress-proxy` running mitmproxy with SSL Bump. All TLS from the agent is terminated at the proxy, matched against the allowlist files (`core.txt`, `lang-*.txt`, `allowlist.d/extra.txt`), and either forwarded or 502'd based on `BLOCK_ON_VIOLATION`. The agent's `/usr/local/bin/claude` is a self-contained binary independent of the project's Node/Python/Ruby, which live under `/opt/runtimes/<lang>` and are pinned by `NODE_VERSION` / `PYTHON_VERSION` / `RUBY_VERSION` in `sandbox.config` (auto-detected from `.nvmrc` / `.python-version` / `.ruby-version` / lockfiles during `setup.sh`).
-
-## Runtime versions currently pinned
-
-- Node: `lts` (resolved at image build)
-- Python: 3.13 (`.python-version`, `pyproject.toml` requires-python)
-- Ruby: 3.2.1 (`.ruby-version`) — but `LANG_PACK=node,python` in `sandbox.config`, so the Ruby runtime is **not** installed into the container until `ruby` is added to `LANG_PACK` and the agent image is rebuilt.
