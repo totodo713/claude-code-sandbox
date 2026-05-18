@@ -73,10 +73,11 @@ Claude Code (`claude` CLI) を **ネットワーク制限付き Docker コンテ
 | `CLAUDE_AUTH_MODE` | `A` ホスト認証情報をコピー / `B` コンテナ内 claude login / `C` API key |
 | `HOST_CLAUDE_DIR` | mode A 時のコピー元ホスト `.claude` パス |
 | `ANTHROPIC_API_KEY` | mode C 時の API key |
-| `LANG_PACK` | `ruby,node,python` のカンマ区切り (検出は自動)。変更時は `build agent` 必要 |
+| `LANG_PACK` | `ruby,node,python,bun` のカンマ区切り (検出は自動)。変更時は `build agent` 必要 |
 | `RUBY_VERSION` | プロジェクトの Ruby バージョン。`.ruby-version`→Gemfile から自動検出。変更時は `build agent` 必要 |
 | `NODE_VERSION` | プロジェクトの Node バージョン。`.nvmrc`→`.node-version`→`package.json` から自動検出。`X`/`X.Y`/`X.Y.Z`/`lts` 可。変更時は `build agent` 必要 |
 | `PYTHON_VERSION` | プロジェクトの Python バージョン。`.python-version`→`runtime.txt`→`pyproject.toml` から自動検出。変更時は `build agent` 必要 |
+| `BUN_VERSION` | プロジェクトの bun バージョン。`.bun-version`→`package.json` engines.bun から自動検出。空=latest。変更時は `build agent` 必要 |
 | `BLOCK_ON_VIOLATION` | `true` で違反 502 遮断 / `false` で警告のみ通過 |
 | `PASSTHROUGH_ENV` | agent に渡すホスト env のキー名 (カンマ区切り) |
 | `PROXY_LISTEN_PORT` | mitmproxy 受け口 (default 8080) |
@@ -146,11 +147,29 @@ NODE_VERSION=14.21.3         # プロジェクトが要求するバージョン
 - Node: `.nvmrc` → `.node-version` → `package.json` の `engines.node`
 - Ruby: `.ruby-version` → Gemfile
 - Python: `.python-version` → `runtime.txt` → `pyproject.toml`
+- Bun: `.bun-version` → `package.json` の `engines.bun`
 
 指定可能な形式:
 - Node: `X` / `X.Y` / `X.Y.Z` / `lts` (Dockerfile 内の `_resolve-node` で具体的なパッチに解決)
 - Python: `X.Y` / `X.Y.Z` (`X.Y` は `_resolve-python` で pyenv definitions から最新パッチに解決。`uv` が生成する `.python-version` は major.minor のことが多いのでこの形式に対応)
 - Ruby: `X.Y.Z` のみ (ruby-build が完全指定を要求)
+- Bun: `X.Y.Z` / 空文字 (空のときはインストーラの最新版を導入)
+
+### bun を入れるとき: ランタイムか PM か
+
+bun は **JavaScript ランタイム** と **パッケージマネージャ** の二役なので、
+このサンドボックスでも 2 通りの入れ方をサポートしている:
+
+| 入れ方 | LANG_PACK | PKG_TOOL_NODE | bun の置き場 | 想定用途 |
+|---|---|---|---|---|
+| ランタイムとして | `bun` (`node` は不要) | (無視) | `/opt/runtimes/bun/bin` | 純 bun プロジェクト。Node を別途入れない |
+| Node の PM として | `node` | `bun` | `/opt/bun/bin` | 既存 Node プロジェクトで bun install を使う移行期 |
+| 両方 | `node,bun` | `bun` (任意) | 両方に入る | Node 実行系と bun ランタイムの両方が要る場合 |
+
+ランタイム用の `LANG_PACK=bun` は `bun.lockb` / `bun.lock` / `bunfig.toml` が
+リポにあれば `setup.sh` が自動で選ぶ。それ以外で `package.json` だけある場合は
+`node` がデフォルトなので、ランタイム bun が欲しければ `LANG_PACK=bun` に
+明示的に変えること。
 
 ### 対応言語を増やすとき
 
@@ -253,7 +272,8 @@ docker volume rm <project>_node-modules-cache
 allowlist/
 ├── core.txt                 # 必須 (anthropic, github, npm)
 ├── lang-ruby.txt            # gemfile/bundler
-├── lang-node.txt            # npm/pnpm/yarn/bun
+├── lang-node.txt            # Node + npm/pnpm/yarn/bun (as PM)
+├── lang-bun.txt             # bun ランタイム (LANG_PACK=bun のとき)
 ├── lang-python.txt          # pypi
 └── allowlist.d/
     └── extra.txt            # プロジェクト固有 (commit OK)

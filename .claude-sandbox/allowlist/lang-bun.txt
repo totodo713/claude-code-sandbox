@@ -1,0 +1,5 @@
+# Bun ランタイム / `bun install`
+# 中身はほぼ npm registry。bun upgrade と内部の features は github.com を
+# 叩くが、それは core.txt 側で許可済み。
+registry.npmjs.org
+*.npmjs.org

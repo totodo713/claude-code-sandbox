@@ -118,6 +118,12 @@ if [ -n "${LANG_PACK:-}" ]; then
       esac ;;
   esac
   case ",${LANG_PACK}," in
+    *,bun,*)
+      check "agent: bun が PATH にある (${BUN_VERSION:-latest})" \
+        docker compose --env-file sandbox.config run --rm -T agent \
+          bash -c 'command -v bun' ;;
+  esac
+  case ",${LANG_PACK}," in
     *,python,*)
       check "agent: python が PATH にある (${PYTHON_VERSION:-?})" \
         docker compose --env-file sandbox.config run --rm -T agent \

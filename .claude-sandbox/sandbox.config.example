@@ -22,22 +22,25 @@ HOST_CLAUDE_DIR=__HOST_CLAUDE_DIR__
 # Mode C 時のみ参照 (空でも OK)
 ANTHROPIC_API_KEY=__ANTHROPIC_API_KEY__
 
-# ---- 言語ランタイム (カンマ区切り複数可: ruby,node,python) ----
+# ---- 言語ランタイム (カンマ区切り複数可: ruby,node,python,bun) ----
 # ここで選んだ言語の実行系を /opt/runtimes/<lang> に導入し、PATH 先頭に置く。
 LANG_PACK=__LANG_PACK__
 
 # プロジェクト実行系のバージョン (LANG_PACK に該当言語を含む場合のみ参照)。
-# LANG_PACK に含む言語は必ずバージョン指定が要る。setup.sh が
+# LANG_PACK に含む言語は基本バージョン必須 (bun のみ空=latest 許容)。setup.sh が
 #   ruby   : .ruby-version → Gemfile
 #   node   : .nvmrc → .node-version → package.json engines.node
 #   python : .python-version → runtime.txt → pyproject.toml
+#   bun    : .bun-version → package.json engines.bun
 # の順で自動検出する。
 #   node   : X / X.Y / X.Y.Z / lts いずれも可
 #   python : X.Y / X.Y.Z 可 (X.Y は pyenv definitions から最新パッチを解決)
 #   ruby   : X.Y.Z (完全指定が必要)
+#   bun    : X.Y.Z (空文字 = latest)
 RUBY_VERSION=__RUBY_VERSION__
 NODE_VERSION=__NODE_VERSION__
 PYTHON_VERSION=__PYTHON_VERSION__
+BUN_VERSION=__BUN_VERSION__
 
 # ---- 言語別パッケージマネージャ (将来の差し替え枠) ----
 # 現状サポート: python={uv,pip}, node={npm,pnpm,yarn,bun}。poetry/pipenv 等は

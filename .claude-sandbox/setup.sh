@@ -97,12 +97,20 @@ check_prereqs() {
 }
 
 # ---- 言語パック自動検出 ----
+# bun と node は両方とも package.json を持つので、bun の手掛かり (lockfile /
+# bunfig.toml) がある場合のみ bun を採用し、それ以外で package.json があれば
+# node とする。両方欲しいケース (LANG_PACK=node,bun) は対話で上書きする想定。
 detect_lang_pack() {
   local repo_root
   repo_root=$(cd "$SCRIPT_DIR/.." && pwd)
   local detected=""
   [ -f "$repo_root/Gemfile" ] && detected+="ruby,"
-  [ -f "$repo_root/package.json" ] && detected+="node,"
+  if [ -f "$repo_root/bun.lockb" ] || [ -f "$repo_root/bun.lock" ] \
+       || [ -f "$repo_root/bunfig.toml" ]; then
+    detected+="bun,"
+  elif [ -f "$repo_root/package.json" ]; then
+    detected+="node,"
+  fi
   if [ -f "$repo_root/pyproject.toml" ] || [ -f "$repo_root/requirements.txt" ]; then
     detected+="python,"
   fi
@@ -154,6 +162,23 @@ detect_node_version() {
   fi
   if [ -f "$repo_root/package.json" ]; then
     v=$(grep -oE '"node"[[:space:]]*:[[:space:]]*"[^"]+"' "$repo_root/package.json" 2>/dev/null \
+         | grep -oE '[0-9]+(\.[0-9]+){0,2}' | head -n1) || true
+    printf "%s" "$v"
+    return
+  fi
+  printf ""
+}
+
+# ---- Bun バージョン検出 (.bun-version → package.json engines.bun) ----
+detect_bun_version() {
+  local repo_root v
+  repo_root=$(cd "$SCRIPT_DIR/.." && pwd)
+  if [ -f "$repo_root/.bun-version" ]; then
+    tr -dc '0-9.' < "$repo_root/.bun-version"
+    return
+  fi
+  if [ -f "$repo_root/package.json" ]; then
+    v=$(grep -oE '"bun"[[:space:]]*:[[:space:]]*"[^"]+"' "$repo_root/package.json" 2>/dev/null \
          | grep -oE '[0-9]+(\.[0-9]+){0,2}' | head -n1) || true
     printf "%s" "$v"
     return
@@ -227,7 +252,8 @@ gather_inputs() {
   # 各言語パックを含む場合のみ、その実行系のバージョンを尋ねる。
   # 新アーキテクチャでは実行系は /opt/runtimes/<lang> に必ずバージョン指定で
   # 導入するため、当該言語が LANG_PACK にあればバージョンは必須。
-  RUBY_VERSION="" NODE_VERSION="" PYTHON_VERSION=""
+  # (bun は空のときインストーラの最新版をそのまま入れるので必須ではない)
+  RUBY_VERSION="" NODE_VERSION="" PYTHON_VERSION="" BUN_VERSION=""
   # パッケージマネージャ: LANG_PACK にその言語があるときだけ lockfile から
   # 自動検出して対話で確認。Dockerfile.agent の case 分岐に対応がないツール
   # (yarn / poetry / pipenv 等) を選ぶと build 時にエラーになる。
@@ -258,6 +284,13 @@ gather_inputs() {
       PYTHON_VERSION=$(ask "Python バージョン (.python-version/pyproject.toml から検出)" "$default_python")
       [ -n "$PYTHON_VERSION" ] || die "python パックには Python バージョンが必要です (.python-version 等で指定、または sandbox.config の PYTHON_VERSION を設定)"
       PKG_TOOL_PYTHON=$(ask "Python パッケージマネージャ (uv/pip 実装済)" "$default_pkg_py")
+      ;;
+  esac
+  case ",${LANG_PACK}," in
+    *,bun,*)
+      local default_bun
+      default_bun=$(detect_bun_version)
+      BUN_VERSION=$(ask "Bun バージョン (.bun-version/package.json engines.bun から検出、空=latest)" "$default_bun")
       ;;
   esac
 
@@ -314,6 +347,7 @@ write_config() {
     -e "s|__RUBY_VERSION__|${RUBY_VERSION}|g" \
     -e "s|__NODE_VERSION__|${NODE_VERSION}|g" \
     -e "s|__PYTHON_VERSION__|${PYTHON_VERSION}|g" \
+    -e "s|__BUN_VERSION__|${BUN_VERSION}|g" \
     -e "s|__PKG_TOOL_PYTHON__|${PKG_TOOL_PYTHON}|g" \
     -e "s|__PKG_TOOL_NODE__|${PKG_TOOL_NODE}|g" \
     -e "s|__PASSTHROUGH_ENV__|${PASSTHROUGH_ENV}|g" \
@@ -511,6 +545,7 @@ load_config() {
   : "${RUBY_VERSION:=}"
   : "${NODE_VERSION:=}"
   : "${PYTHON_VERSION:=}"
+  : "${BUN_VERSION:=}"
   : "${PKG_TOOL_PYTHON:=uv}"
   : "${PKG_TOOL_NODE:=npm}"
   # mode 固有の必須値を検証・補完。sandbox.config を手で編集して mode を
