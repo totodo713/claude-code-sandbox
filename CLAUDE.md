@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 共通ルール
+
+プロジェクト横断のルール (応答言語ポリシー等) は `.claude/CLAUDE.md` に置く。
+以下の import で読み込む:
+
+@.claude/CLAUDE.md
+
 ## What this repo is
 
 `claude-code-sandbox` — a multi-language workspace (JavaScript / Python / Ruby) for operational/support scripts. Today it only holds smoke-test clients that hit `https://httpbin.org/get` (`jsscript/client_test.js`, `pyscript/client_test.py`); `rbscript/` is an empty placeholder. The bulk of the repo is the `.claude-sandbox/` infrastructure that runs Claude Code under network egress restrictions.
