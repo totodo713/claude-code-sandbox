@@ -4,7 +4,7 @@
 
 すべて `.claude-sandbox/` を CWD として実行する想定:
 ```bash
-cd /home/devman/RubymineProjects/operation-support-tools/.claude-sandbox
+cd /home/devman/RubymineProjects/claude-code-sandbox/.claude-sandbox
 ```
 
 ---
@@ -21,7 +21,7 @@ cd /home/devman/RubymineProjects/operation-support-tools/.claude-sandbox
 ```
 
 対話に以下を入力 (デフォルトを受け入れる場合は Enter):
-- プロジェクト名: `operation-support-tools` (default)
+- プロジェクト名: `claude-code-sandbox` (default)
 - 言語パック: `ruby` (Gemfile があるので自動検出)
 - 認証方式: `A`
 - ホスト ~/.claude のパス: `/home/devman/.claude` (default)
@@ -34,7 +34,7 @@ cd /home/devman/RubymineProjects/operation-support-tools/.claude-sandbox
   - `docker-compose.override.yml`
   - `.runtime.env`
   - `proxy/certs/mitmproxy-ca-cert.pem`
-- [x] agent イメージがビルドされている: `docker image inspect operation-support-tools-agent:latest` が成功
+- [x] agent イメージがビルドされている: `docker image inspect claude-code-sandbox-agent:latest` が成功
 - [x] 最後に走る `doctor.sh` がすべて緑
 
 ### 1.2 doctor.sh の単独実行
@@ -267,7 +267,7 @@ ls node_modules/lodash >/dev/null && echo "container: ok"
 
 ホスト側 (別ターミナル) で:
 ```bash
-ls /home/devman/RubymineProjects/operation-support-tools/node_modules/ | wc -l
+ls /home/devman/RubymineProjects/claude-code-sandbox/node_modules/ | wc -l
 # → 0 (空のマウントポイントのみ。中身 (lodash) は named volume に隔離)
 ```
 
@@ -301,7 +301,7 @@ uv run pyscript/client_test.py
 
 ホスト側 (別ターミナル) で:
 ```bash
-ls /home/devman/RubymineProjects/operation-support-tools/.venv/ | wc -l
+ls /home/devman/RubymineProjects/claude-code-sandbox/.venv/ | wc -l
 # → 0 (空のマウントポイントのみ。中身は venv-cache に隔離)
 ```
 
@@ -329,7 +329,7 @@ git init
 echo '{"name":"test"}' > package.json
 
 # 2. .claude-sandbox をコピー
-cp -r /home/devman/RubymineProjects/operation-support-tools/.claude-sandbox .
+cp -r /home/devman/RubymineProjects/claude-code-sandbox/.claude-sandbox .
 
 # 3. 生成物を消してクリーン状態に
 rm -f .claude-sandbox/sandbox.config .claude-sandbox/.runtime.env \
@@ -363,17 +363,17 @@ rm -rf /tmp/portability-test
 
 **手順**:
 ```bash
-cd /home/devman/RubymineProjects/operation-support-tools/.claude-sandbox
+cd /home/devman/RubymineProjects/claude-code-sandbox/.claude-sandbox
 docker compose --env-file sandbox.config down
 ```
 
 **期待結果**:
-- [ ] `operation-support-tools-agent` `operation-support-tools-egress-proxy` の両コンテナが消える
-- [ ] `docker network ls` でも `operation-support-tools_sandbox-internal` 等が消える
+- [ ] `claude-code-sandbox-agent` `claude-code-sandbox-egress-proxy` の両コンテナが消える
+- [ ] `docker network ls` でも `claude-code-sandbox_sandbox-internal` 等が消える
 
 ### 9.2 image のクリーンアップ (任意)
 ```bash
-docker image rm operation-support-tools-agent:latest
+docker image rm claude-code-sandbox-agent:latest
 docker image rm mitmproxy/mitmproxy:latest
 ```
 

@@ -70,7 +70,7 @@ wheels = [
 ]
 
 [[package]]
-name = "operation-support-tools"
+name = "claude-code-sandbox"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

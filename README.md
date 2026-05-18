@@ -1,4 +1,4 @@
-# operation-support-tools
+# claude-code-sandbox
 
 運用・サポート業務向けスクリプトを JavaScript / Python / Ruby の 3 言語で管理するマルチランタイム ワークスペース。各言語のスクリプトは、ネットワーク制限付きの Claude Code サンドボックス (`.claude-sandbox/`) 内で実行することを前提としています。
 
