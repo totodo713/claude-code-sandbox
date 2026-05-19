@@ -15,6 +15,10 @@ Claude Code (`claude` CLI) を **ネットワーク制限付き Docker コンテ
 - **診断**: `./.claude-sandbox/doctor.sh` (12 項目チェック) / `./.claude-sandbox/logs.sh` (proxy ログ)
 - **詳細**: 下のセクションへ
 
+## Tips
+
+- `.claude-sandbox/logs.sh | grep block_connect` : Outbound通信ブロックのログを監視するときに使う
+
 ## どう守られているか
 
 ```
