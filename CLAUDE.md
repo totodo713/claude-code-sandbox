@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-`claude-code-sandbox` — a multi-language workspace (JavaScript / Python / Ruby) for operational/support scripts. Today it only holds smoke-test clients that hit `https://httpbin.org/get` (`jsscript/client_test.js`, `pyscript/client_test.py`); `rbscript/` is an empty placeholder. The bulk of the repo is the `.claude-sandbox/` infrastructure that runs Claude Code under network egress restrictions.
+`claude-code-sandbox` — a multi-language workspace (JavaScript / Python / Ruby) for operational/support scripts. Today it only holds smoke-test clients that hit `https://httpbin.org/get` (`jsscript/client_test.js`, `pyscript/client_test.py`, `rbscript/client_test.rb`). `httpbin.org` is intentionally **not** on the allowlist: running the scripts as-is is the automatic block-confirmation test (expect 502). Confirming the pass-through path is a manual procedure that temporarily adds `httpbin.org` to `allowlist.d/extra.txt` and reverts it — see `README.md` "テスト実行". The bulk of the repo is the `.claude-sandbox/` infrastructure that runs Claude Code under network egress restrictions.
 
 ## Critical: run installs and scripts inside the sandbox container
 
@@ -26,6 +26,7 @@ bundle install          # ruby deps  (only after gems are added)
 
 node jsscript/client_test.js
 uv run pyscript/client_test.py
+ruby rbscript/client_test.rb
 ```
 
 The host's `node_modules/` and `.venv/` are separate from the container's (named volumes shadow the bind mount inside the container), so host-side installs do not propagate to the sandbox. Lockfiles (`pnpm-lock.yaml`, `uv.lock`, `Gemfile.lock`) are the shared source of truth.
