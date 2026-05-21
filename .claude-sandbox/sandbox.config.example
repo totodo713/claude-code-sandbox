@@ -65,6 +65,13 @@ BUN_VERSION=__BUN_VERSION__
 PKG_TOOL_PYTHON=__PKG_TOOL_PYTHON__
 PKG_TOOL_NODE=__PKG_TOOL_NODE__
 
+# pnpm / yarn を corepack で固定するバージョン (例 8.15.0)。空なら pnpm=latest /
+# yarn=stable。setup.sh が package.json の "packageManager" から自動検出する。
+# 古い (EOL) Node を指定する場合、latest の pnpm/yarn は Node とランタイム非互換に
+# なりやすく、また古い Node 同梱 corepack は dist-tag 解決・署名検証で build が落ちる。
+# その対策として固定版を指定する (build 失敗時は corepack を自動更新して再試行する)。
+PKG_TOOL_NODE_VERSION=__PKG_TOOL_NODE_VERSION__
+
 # ---- allowlist ----
 # true: 違反リクエストを 502 で遮断 / false: 警告ログのみ通過
 BLOCK_ON_VIOLATION=true

@@ -19,6 +19,9 @@ ARG BUN_VERSION=
 # 現状: python={uv,pip}, node={npm,pnpm,yarn,bun}。
 ARG PKG_TOOL_PYTHON=uv
 ARG PKG_TOOL_NODE=npm
+# pnpm / yarn を corepack に固定するバージョン (例 8.15.0)。
+# 空なら pnpm=latest / yarn=stable に既定する (_corepack-activate 参照)。
+ARG PKG_TOOL_NODE_VERSION=
 
 ENV DEBIAN_FRONTEND=noninteractive
 # corepack (pnpm/yarn 用 shim) の作業ディレクトリを共有可能な場所に置き、
@@ -75,6 +78,43 @@ echo "$v"
 EOF
 RUN chmod +x /usr/local/bin/_resolve-python
 
+# corepack で node 用パッケージマネージャ (pnpm/yarn) を有効化・固定するヘルパ。
+# 古い Node 同梱の corepack は dist-tag (latest/stable) 解決や npm registry の
+# 署名検証 (鍵ローテーション後の stale keys) で失敗し、build が落ちる。失敗時は
+# corepack を既知の動作版へ更新して再試行し、最後に署名検証を無効化する三段構えの
+# rescue で build を通す。鍵が新しい Node では 1 段目で成功し署名検証も有効なまま。
+#   $1 = pm 名 (pnpm|yarn)   $2 = バージョン (例 8.15.0、空なら latest/stable)
+COPY <<'EOF' /usr/local/bin/_corepack-activate
+#!/bin/sh
+set -eu
+pm="$1"
+ver="${2:-}"
+if [ -z "$ver" ]; then
+  case "$pm" in yarn) ver=stable ;; *) ver=latest ;; esac
+fi
+spec="${pm}@${ver}"
+
+corepack enable "$pm"
+
+# 1) まず同梱 corepack で試す (鍵が新しい Node ではここで成功し署名検証も有効)。
+if corepack prepare "$spec" --activate; then exit 0; fi
+echo "WARN[_corepack-activate]: 'corepack prepare ${spec}' 失敗。corepack を更新して再試行。" >&2
+
+# 2) corepack を Node 18.17+/20/22+ で動く既知の版へ更新して再試行。
+#    (古い Node 同梱版の stale keys / dist-tag バグを回避。engines 不一致は npm の
+#     既定 (engine-strict=false) では警告止まりで導入され、実体は同一コードなので
+#     古い 18.x patch でも動作する。)
+npm install -g --force corepack@0.33.0 || true
+hash -r 2>/dev/null || true
+if corepack prepare "$spec" --activate; then exit 0; fi
+echo "WARN[_corepack-activate]: corepack 更新後も失敗。署名検証を無効化して再試行。" >&2
+
+# 3) 最後の手段: integrity keys の検証を無効化して再試行 (corepack >= 0.29 で有効。
+#    2 段目で 0.33.0 を導入済みなので利用可能)。
+COREPACK_INTEGRITY_KEYS=0 corepack prepare "$spec" --activate
+EOF
+RUN chmod +x /usr/local/bin/_corepack-activate
+
 # ── Claude Code CLI 本体を公式ネイティブインストーラで導入 ──
 # 配布物は Node 内蔵の自己完結バイナリ。実行時に Node 不要なので、プロジェクトが
 # 別 Node を PATH 先頭に置いても無傷。インストーラは ~/.local/bin/claude を
@@ -104,14 +144,12 @@ RUN set -eu; \
             pnpm) \
               mkdir -p /opt/corepack; \
               export PATH="/opt/runtimes/node/bin:$PATH"; \
-              corepack enable pnpm; \
-              corepack prepare pnpm@latest --activate; \
+              _corepack-activate pnpm "${PKG_TOOL_NODE_VERSION:-}"; \
               chown -R "$UID:$GID" /opt/corepack ;; \
             yarn) \
               mkdir -p /opt/corepack; \
               export PATH="/opt/runtimes/node/bin:$PATH"; \
-              corepack enable yarn; \
-              corepack prepare yarn@stable --activate; \
+              _corepack-activate yarn "${PKG_TOOL_NODE_VERSION:-}"; \
               chown -R "$UID:$GID" /opt/corepack ;; \
             bun) \
               apt-get update && apt-get install -y --no-install-recommends unzip; \
@@ -168,7 +206,7 @@ RUN set -eu; \
         *) echo "Unknown LANG_PACK entry: $pack" >&2; exit 1 ;; \
       esac; \
     done; \
-    rm -f /usr/local/bin/_resolve-node /usr/local/bin/_resolve-python
+    rm -f /usr/local/bin/_resolve-node /usr/local/bin/_resolve-python /usr/local/bin/_corepack-activate
 
 # mitmproxy CA を信頼チェーンに追加 (setup.sh が事前に生成)
 COPY proxy/certs/ /tmp/sandbox-ca/
