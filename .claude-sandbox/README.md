@@ -79,18 +79,23 @@ egress-proxy は 1 つを全 agent で共有し、agent コンテナだけを wo
 
 # worker 側 (別ターミナルで issue ごとに)
 ./.claude-sandbox/worker.sh fix/issue-123 main      # main から fix/issue-123 を切って起動
+./.claude-sandbox/worker.sh fix/issue-123 --resume  # 既存ブランチで前回セッションを再開
 ./.claude-sandbox/worker.sh --shell fix/issue-123   # bash で入る (デバッグ)
 ./.claude-sandbox/worker.sh --list                  # worktree 一覧
 ./.claude-sandbox/worker.sh --remove fix/issue-123  # worktree と中の依存を削除 (branch は残す)
 ./.claude-sandbox/worker.sh --reset                 # ホストリポの worker.sh 由来 .git 変更を戻す
 ```
 
+`<branch> [base-ref]` の後ろに付けた引数 (`-` 始まり、または base の後ろ) は
+`claude` にそのまま転送される (例: `--resume` / `--model` など)。base-ref は
+`claude` 引数と区別するため `-` 始まりにできない。
+
 ### 仕組みと隔離
 
 | 項目 | 挙動 |
 |---|---|
 | proxy | 1 つを全 worker で共有 (allowlist も共通)。worker を増やしても proxy は増えない |
-| worktree | `/workspace/.git/.worktrees/<name>` に作る。`.git` 配下なので git 追跡対象外、かつホスト側もプロジェクトフォルダ内に収まる |
+| worktree | `/workspace/.git/.worktrees/<name>` に作る (`<name>` = branch 名の slug + 衝突回避ハッシュ)。`.git` 配下なので git 追跡対象外、かつホスト側もプロジェクトフォルダ内に収まる。複数 worker 同時起動時の `.git` 更新は flock で直列化する |
 | 依存 | `node_modules` / `.venv` / gem は **worktree 内**に置き、worktree が別ディレクトリであることで自然に分離する。pnpm store / uv・npm キャッシュは全 worker で共有 (高速化) |
 | ブランチ | ローカルに無ければ base-ref (省略時 `HEAD`) から新規作成、あれば既存をチェックアウト。branch 名は英数始まり `[A-Za-z0-9 . _ / -]` のみ |
 

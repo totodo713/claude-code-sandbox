@@ -5,15 +5,7 @@
 # と DL キャッシュ (pnpm store / uv cache 等) は run.sh と共有しつつ、作業ツリーと
 # インストール済み依存 (.venv / node_modules / gem) は worktree 内に閉じ込めて隔離する。
 #
-# 使い方:
-#   ./worker.sh <branch> [base-ref]      worktree を用意して worker claude を起動
-#   ./worker.sh --shell <branch> [base]  同上だが bash で入る (デバッグ用)
-#   ./worker.sh --list                   登録済み worktree を一覧
-#   ./worker.sh --remove <branch>        worktree (と中の依存) を削除 (branch は残す)
-#   ./worker.sh --reset                  ホストリポの worker.sh 由来 .git 変更を戻す
-#
-# 例:
-#   ./worker.sh fix/issue-123 main       main から fix/issue-123 を切って worker 起動
+# 使い方の詳細は下の usage() / `./worker.sh --help` に集約 (重複を避けるため一本化)。
 #
 # 設計メモ:
 #   - worktree は /workspace/.git/.worktrees/<name> (= .git 配下) に作る。git は .git
@@ -53,25 +45,35 @@ usage() {
 worker.sh — worktree 単位で隔離した worker claude をサンドボックスで起動する。
 
 使い方:
-  ./worker.sh <branch> [base-ref]      worktree を用意して worker claude を起動
-  ./worker.sh --shell <branch> [base]  同上だが bash で入る (デバッグ用)
-  ./worker.sh --list                   登録済み worktree を一覧
-  ./worker.sh --remove <branch>        worktree (と中の依存) を削除 (branch は残す)
-  ./worker.sh --reset                  ホストリポの worker.sh 由来 .git 変更を戻す
+  ./worker.sh <branch> [base-ref] [claude 引数...]  worktree を用意して worker claude を起動
+  ./worker.sh --shell <branch> [base-ref]           同上だが bash で入る (デバッグ用)
+  ./worker.sh --list                                登録済み worktree を一覧
+  ./worker.sh --remove <branch>                     worktree (と中の依存) を削除 (branch は残す)
+  ./worker.sh --reset                               ホストリポの worker.sh 由来 .git 変更を戻す
 
 注意: --remove は worktree 内の未コミット変更も破棄する (push/commit 済みか確認)。
 
 例:
-  ./worker.sh fix/issue-123 main       main から fix/issue-123 を切って worker 起動
+  ./worker.sh fix/issue-123 main           main から fix/issue-123 を切って worker 起動
+  ./worker.sh fix/issue-123 --resume       既存ブランチで前回セッションを再開
+                                           ('-' 始まりの語以降は claude へそのまま転送)
 
 branch 名は英数で始まり [A-Za-z0-9 . _ / -] のみ。base 省略時は HEAD
 (= main 側コンテナの現在チェックアウト) から切るので、意図したベースは明示推奨。
+base-ref は '-' 始まりにできない (claude 引数と区別するため)。
 EOF
 }
 
 # branch 名をパス安全な slug へ変換 (英数 . _ - 以外は - に畳む)。検証後のみ呼ぶ。
+# 末尾に元のブランチ名の決定的ハッシュ (cksum, POSIX で macOS/Linux 共通) を付け、
+# 別ブランチが同じ readable 名に畳まれても slug が衝突しないようにする
+# (例: fix/issue-1 と fix-issue-1 は readable は同じでも別 slug になる)。
+# 決定的なので --list / --remove も同じ branch から同じ slug を再計算でき整合する。
 slug() {
-  printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | sed -E 's/-+/-/g; s/^-//; s/-$//'
+  local readable hash
+  readable=$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | sed -E 's/-+/-/g; s/^-//; s/-$//')
+  hash=$(printf '%s' "$1" | cksum | cut -d' ' -f1)
+  printf '%s-%x' "$readable" "$hash"
 }
 
 # branch 名を検証 (path / コンテナ内スクリプトに乗せる前に弾く)。bash の [[ =~ ]] は
@@ -109,9 +111,9 @@ cmd_remove() {
   name=$(slug "$branch"); wt="${WORKTREE_ROOT}/${name}"
   docker compose --env-file sandbox.config run --rm -T --no-deps -e WT="$wt" agent bash -c '
     if git -C /workspace worktree list --porcelain | grep -qx "worktree $WT"; then
-      git -C /workspace worktree remove --force "$WT" && echo ">> 削除しました: $WT (branch は残ります)"
+      git -C /workspace worktree remove --force "$WT" && echo "==> 削除しました: $WT (branch は残ります)"
     else
-      echo ">> 該当する worktree はありません: $WT"
+      echo "==> 該当する worktree はありません: $WT"
     fi
     # gc.worktreePruneExpire=never の影響を受けず確実に admin entry を掃除する。
     git -C /workspace worktree prune --expire=now
@@ -131,31 +133,39 @@ cmd_reset() {
       exit 1
     fi
     if git -C /workspace config --unset gc.worktreePruneExpire 2>/dev/null; then
-      echo ">> gc.worktreePruneExpire を解除しました"
+      echo "==> gc.worktreePruneExpire を解除しました"
     else
-      echo ">> gc.worktreePruneExpire は未設定 (skip)"
+      echo "==> gc.worktreePruneExpire は未設定 (skip)"
     fi
     excl=/workspace/.git/info/exclude
     if [ -f "$excl" ]; then
       tmp=$(mktemp)
       grep -vxF -e node_modules -e .venv -e .worker-bundle "$excl" > "$tmp" || true
       if cmp -s "$excl" "$tmp"; then
-        echo ">> .git/info/exclude に worker の追記行なし (skip)"
+        echo "==> .git/info/exclude に worker の追記行なし (skip)"
       else
         cat "$tmp" > "$excl"
-        echo ">> .git/info/exclude から node_modules / .venv / .worker-bundle を除去しました"
+        echo "==> .git/info/exclude から node_modules / .venv / .worker-bundle を除去しました"
       fi
       rm -f "$tmp"
     fi
-    echo ">> reset 完了。worker.sh 由来のホストリポ変更を戻しました。"
+    rm -f /workspace/.git/.worker-setup.lock
+    echo "==> reset 完了。worker.sh 由来のホストリポ変更を戻しました。"
   '
 }
 
 # コンテナ内 bootstrap。値は env (WT/BR/BASE/MODE) で渡し、スクリプト本文へは補間しない
 # (branch 名経由のシェルインジェクション防止)。本文に ' を含めないこと (単一引用符で囲うため)。
+# claude へ転送する引数は bash -c の位置引数 ("$@") で渡す (env 文字列結合と違いクォートを保てる)。
 BOOT='
 set -e
 export GEM_HOME="$WT/.worker-bundle" BUNDLE_PATH="$WT/.worker-bundle" UV_PYTHON_PREFERENCE=only-system
+# 共有 /workspace/.git への変更 (config / info/exclude / prune / worktree add) は worker 間で
+# 直列化する。複数 worker の同時起動時に worktree add/prune が競合したり info/exclude が
+# 二重追記されるのを防ぐ。flock を FD 9 に取り、worktree が用意できたら解放する
+# (claude 本体は外で exec)。flock は util-linux 同梱でコンテナに存在する。
+exec 9>/workspace/.git/.worker-setup.lock
+flock 9
 git -C /workspace config gc.worktreePruneExpire never
 # 依存の保存先を git status から隠す (配布先 repo の .gitignore に依存しないため自前で)。
 for p in node_modules .venv .worker-bundle; do
@@ -172,7 +182,7 @@ if [ -d "$WT" ] && git -C /workspace worktree list --porcelain | grep -qx "workt
     exit 1
   fi
   if [ "$cur" != "$BR" ]; then
-    echo "ERROR: $WT は既にブランチ \"$cur\" を使用中です (要求: \"$BR\")。slug 衝突の可能性。別のブランチ名にするか worker.sh --remove で削除してください。" >&2
+    echo "ERROR: $WT は既にブランチ \"$cur\" を使用中です (要求: \"$BR\")。worker.sh --remove で削除してから再実行してください。" >&2
     exit 1
   fi
 elif git -C /workspace show-ref --verify --quiet "refs/heads/$BR"; then
@@ -182,28 +192,37 @@ elif git -C /workspace show-ref --verify --quiet "refs/heads/$BR"; then
 else
   git -C /workspace worktree add "$WT" -b "$BR" "$BASE"
 fi
+flock -u 9
 cd "$WT"
-if [ "$MODE" = shell ]; then exec bash; else exec claude; fi
+if [ "$MODE" = shell ]; then exec bash; else exec claude "$@"; fi
 '
 
 launch() {
-  local mode="$1" branch="$2" base="${3:-HEAD}"
+  local mode="$1"; shift
+  local branch="${1:-}"
   [ -n "$branch" ] || { usage; exit 1; }
+  shift
   validate_branch "$branch"
+  # 第1余剰引数が '-' 始まりでなければ base-ref とみなす。'-' 始まりは claude へ転送する引数。
+  local base=HEAD
+  if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+    base="$1"; shift
+  fi
   validate_base "$base"
   local name wt
   name=$(slug "$branch"); wt="${WORKTREE_ROOT}/${name}"
 
+  # 残り "$@" は claude への転送引数。bash -c の位置引数として渡し、BOOT 内で "$@" 展開する。
   exec docker compose --env-file sandbox.config run --rm -it \
     -e WT="$wt" -e BR="$branch" -e BASE="$base" -e MODE="$mode" \
-    agent bash -c "$BOOT"
+    agent bash -c "$BOOT" worker "$@"
 }
 
 case "${1:-}" in
-  --list)        cmd_list ;;
-  --remove)      shift; [ -n "${1:-}" ] || { usage; exit 1; }; cmd_remove "$1" ;;
-  --reset)       cmd_reset ;;
-  --shell)       shift; launch shell "${1:-}" "${2:-}" ;;
+  --list)        shift; [ $# -eq 0 ] || { echo "--list は引数を取りません。" >&2; usage; exit 1; }; cmd_list ;;
+  --remove)      shift; [ $# -eq 1 ] || { echo "--remove は <branch> を 1 つだけ指定してください。" >&2; usage; exit 1; }; cmd_remove "$1" ;;
+  --reset)       shift; [ $# -eq 0 ] || { echo "--reset は引数を取りません。" >&2; usage; exit 1; }; cmd_reset ;;
+  --shell)       shift; launch shell "$@" ;;
   -h|--help|"")  usage ;;
-  *)             launch claude "$1" "${2:-}" ;;
+  *)             launch claude "$@" ;;
 esac
