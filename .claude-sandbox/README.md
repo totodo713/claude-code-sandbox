@@ -112,6 +112,9 @@ egress-proxy は 1 つを全 agent で共有し、agent コンテナだけを wo
 - `/workspace` 直下の `node_modules` / `.venv` は **main 用の named volume**。worker は
   起動時に worktree 内へ `cd` 済みなので通常は触れないが、`/workspace` 直下で
   install すると main 側を書き換えてしまうので注意。
+- worker の依存は (`run.sh` の named volume と異なり) **ホストの `.git/.worktrees/<name>/`
+  配下に実体化**する。worktree が別ディレクトリであることで分離する設計で、`.git` 配下
+  ゆえ git 追跡されず、`worker.sh --remove` で worktree ごと回収される。
 - 後始末は `worker.sh --remove <branch>` で (中の依存ごと消える。branch は残る)。
   `clean.sh` では消えない。
 

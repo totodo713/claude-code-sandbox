@@ -68,10 +68,12 @@ slug() {
   printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | sed -E 's/-+/-/g; s/^-//; s/-$//'
 }
 
-# branch 名を検証 (path / コンテナ内スクリプトに乗せる前に弾く)。
+# branch 名を検証 (path / コンテナ内スクリプトに乗せる前に弾く)。bash の [[ =~ ]] は
+# 文字列全体に対して評価するので、改行入りの値も 1 段目で弾ける (grep -E の行単位
+# マッチだとすり抜ける)。
 validate_branch() {
   local b="$1"
-  printf '%s' "$b" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/-]*$' || {
+  [[ "$b" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || {
     echo "不正なブランチ名 '$b': 英数で始まり [A-Za-z0-9 . _ / -] のみ使用できます。" >&2; exit 1; }
   case "$b" in
     */|*//*|*..*) echo "不正なブランチ名 '$b': 連続/末尾の '/' や '..' は使えません。" >&2; exit 1 ;;
@@ -121,6 +123,10 @@ done
 git -C /workspace worktree prune --expire=now
 if [ -d "$WT" ] && git -C /workspace worktree list --porcelain | grep -qx "worktree $WT"; then
   cur=$(git -C "$WT" symbolic-ref --short HEAD 2>/dev/null || true)
+  if [ -z "$cur" ]; then
+    echo "ERROR: $WT は detached HEAD の worktree です。worker.sh --remove で削除してから再実行してください。" >&2
+    exit 1
+  fi
   if [ "$cur" != "$BR" ]; then
     echo "ERROR: $WT は既にブランチ \"$cur\" を使用中です (要求: \"$BR\")。slug 衝突の可能性。別のブランチ名にするか worker.sh --remove で削除してください。" >&2
     exit 1
