@@ -21,6 +21,9 @@
 #   docker named volume (bundle-cache / node-modules-cache / venv-cache 等)
 #   はこのスクリプトでは消さない。完全リセットしたい場合は別途:
 #     docker compose --env-file sandbox.config down -v
+#   worker.sh で作った worktree (.git/.worktrees/<name>) も消さない
+#   (未 push 作業が残っている可能性があるため)。個別に後始末する:
+#     ./.claude-sandbox/worker.sh --remove <branch>
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 

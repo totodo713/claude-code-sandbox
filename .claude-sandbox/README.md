@@ -60,11 +60,55 @@ Claude Code (`claude` CLI) を **ネットワーク制限付き Docker コンテ
 
 # 補助
 ./.claude-sandbox/shell.sh         # コンテナに bash で入る
+./.claude-sandbox/worker.sh <branch> # worktree 単位で隔離した worker を起動 (後述)
 ./.claude-sandbox/logs.sh          # proxy ログ tail
 ./.claude-sandbox/doctor.sh        # 環境診断
 ./.claude-sandbox/copy-to.sh <dst> # 他リポへ .claude-sandbox/ をコピー
 ./.claude-sandbox/clean.sh         # setup 生成物を消して初期状態に戻す
 ```
+
+## マルチエージェント開発 (`worker.sh`)
+
+Main agent (`run.sh`) を planning / レビュー担当に、worker agent を issue 実装担当に
+分け、**worker ごとに別ブランチ・別 worktree で並行**させるための仕組み。
+egress-proxy は 1 つを全 agent で共有し、agent コンテナだけを worker 数ぶん起動する。
+
+```bash
+# main 側 (パートナー: planning / 受け入れ確認)
+./.claude-sandbox/run.sh
+
+# worker 側 (別ターミナルで issue ごとに)
+./.claude-sandbox/worker.sh fix/issue-123 main      # main から fix/issue-123 を切って起動
+./.claude-sandbox/worker.sh --shell fix/issue-123   # bash で入る (デバッグ)
+./.claude-sandbox/worker.sh --list                  # worktree 一覧
+./.claude-sandbox/worker.sh --remove fix/issue-123  # worktree と中の依存を削除 (branch は残す)
+```
+
+### 仕組みと隔離
+
+| 項目 | 挙動 |
+|---|---|
+| proxy | 1 つを全 worker で共有 (allowlist も共通)。worker を増やしても proxy は増えない |
+| worktree | `/workspace/.git/.worktrees/<name>` に作る。`.git` 配下なので git 追跡対象外、かつホスト側もプロジェクトフォルダ内に収まる |
+| 依存 | `node_modules` / `.venv` / gem は **worktree 内**に置き、worktree が別ディレクトリであることで自然に分離する。pnpm store / uv・npm キャッシュは全 worker で共有 (高速化) |
+| ブランチ | ローカルに無ければ base-ref (省略時 `HEAD`) から新規作成、あれば既存をチェックアウト |
+
+依存が worktree 内に閉じるため、worker A と worker B が別バージョンのパッケージを
+入れても干渉しない (共有 named volume を 1 ブランチで使う `run.sh` 単体とは異なる)。
+全体方針は後述の「[依存パッケージの保存先](#依存パッケージの保存先-volume-分離)」を参照。
+
+### 注意
+
+- worktree は **コンテナ内で作成**される。ホスト git (2.43) は相対パス worktree
+  (`worktree.useRelativePaths`, git 2.48+) を持たず gitdir を絶対パスで記録するため、
+  `/workspace` を正準パスに統一して初めてコンテナ内で解決できる。よって **ホスト側の
+  git で worktree 内を操作したり `git worktree prune` を実行しない** (記録パス
+  `/workspace/...` はホストに存在せず prune 対象に見える)。誤 prune 防止に `worker.sh`
+  は `gc.worktreePruneExpire=never` を自動設定する。
+- worktree 内のファイルは IDE で閲覧・編集できるが、git 操作はコンテナ内
+  (worker / `shell.sh`) で行う (上記の理由でホスト git からは扱えない)。
+- 後始末は `worker.sh --remove <branch>` で (中の依存ごと消える。branch は残る)。
+  `clean.sh` では消えない。
 
 ## 設定ファイル: `sandbox.config`
 
@@ -415,7 +459,7 @@ docker compose --env-file sandbox.config down -v
 
 | パス | 役割 | commit? |
 |---|---|---|
-| `setup.sh` `run.sh` `shell.sh` `logs.sh` `doctor.sh` `copy-to.sh` `clean.sh` | エントリポイント | yes |
+| `setup.sh` `run.sh` `worker.sh` `shell.sh` `logs.sh` `doctor.sh` `copy-to.sh` `clean.sh` | エントリポイント | yes |
 | `git-pat.sh` | mode H 用 fine-grained PAT 発行支援 (ホストで実行) | yes |
 | `docker-compose.yml` `Dockerfile.agent` | 基盤 | yes |
 | `proxy/allowlist_addon.py` | mitmproxy addon | yes |
