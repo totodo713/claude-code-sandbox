@@ -21,11 +21,13 @@
 #     (worktree.useRelativePaths, 2.48+) を持たず gitdir を絶対パスで記録するため、
 #     /workspace を正準パスに統一しないとコンテナ内で gitdir が解決できない。
 #   - 依存は worktree 内に置く。worktree は元々別ディレクトリなのでこれだけで分離でき、
-#     pnpm store と同一 fs なので hardlink も効く。node_modules/.venv は repo の
-#     .gitignore (/node_modules/ /.venv/) が、gem の保存先 .worker-bundle は
-#     .git/info/exclude への追記が、それぞれ git status を汚さないようにする。
+#     pnpm は store を /workspace (home と別 fs) 配下に自動配置するので hardlink も効く。
+#     node_modules / .venv / gem 保存先 .worker-bundle はいずれも .git/info/exclude へ
+#     冪等追記して git status を汚さない (配布先 repo の .gitignore に依存しない)。
 #     (named volume を worktree に重ねたり node_modules を symlink にすると、
 #      `git worktree add` の "already exists" や pnpm の ENOTDIR で失敗する。)
+#   - ブランチ名・base はコンテナ内スクリプトへ **文字列補間せず env で渡す** (branch
+#     名経由のシェルインジェクション防止)。入口で branch 名を検証する。
 #   - 起動は bash -c (非ログイン)。bash -l は /etc/profile が PATH を上書きし
 #     /opt/runtimes/* を落とすため (run.sh が claude を直接 exec するのと同じ理由)。
 #   - UV_PYTHON_PREFERENCE=only-system: uv 既定の managed Python ダウンロード
@@ -39,16 +41,49 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR"
 
 [ -f sandbox.config ] || { echo "sandbox.config がありません。./setup.sh を先に実行してください。" >&2; exit 1; }
+[ -f proxy/certs/mitmproxy-ca-cert.pem ] || { echo "CA がありません。./setup.sh --ca-only を実行してください。" >&2; exit 1; }
 
 WORKTREE_ROOT="/workspace/.git/.worktrees"
 
 usage() {
-  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+  cat <<'EOF'
+worker.sh — worktree 単位で隔離した worker claude をサンドボックスで起動する。
+
+使い方:
+  ./worker.sh <branch> [base-ref]      worktree を用意して worker claude を起動
+  ./worker.sh --shell <branch> [base]  同上だが bash で入る (デバッグ用)
+  ./worker.sh --list                   登録済み worktree を一覧
+  ./worker.sh --remove <branch>        worktree (と中の依存) を削除 (branch は残す)
+
+例:
+  ./worker.sh fix/issue-123 main       main から fix/issue-123 を切って worker 起動
+
+branch 名は英数で始まり [A-Za-z0-9 . _ / -] のみ。base 省略時は HEAD
+(= main 側コンテナの現在チェックアウト) から切るので、意図したベースは明示推奨。
+EOF
 }
 
-# branch 名をパス/ボリューム名に使える slug へ変換 (英数 . _ - 以外は - に畳む)
+# branch 名をパス安全な slug へ変換 (英数 . _ - 以外は - に畳む)。検証後のみ呼ぶ。
 slug() {
   printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | sed -E 's/-+/-/g; s/^-//; s/-$//'
+}
+
+# branch 名を検証 (path / コンテナ内スクリプトに乗せる前に弾く)。
+validate_branch() {
+  local b="$1"
+  printf '%s' "$b" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/-]*$' || {
+    echo "不正なブランチ名 '$b': 英数で始まり [A-Za-z0-9 . _ / -] のみ使用できます。" >&2; exit 1; }
+  case "$b" in
+    */|*//*|*..*) echo "不正なブランチ名 '$b': 連続/末尾の '/' や '..' は使えません。" >&2; exit 1 ;;
+  esac
+  git check-ref-format --branch "$b" >/dev/null 2>&1 || {
+    echo "git が受け付けないブランチ名: '$b'" >&2; exit 1; }
+}
+
+# base-ref を検証 (env 渡しなので注入はしないが、明らかに不正な値は早期に弾く)。
+validate_base() {
+  printf '%s' "$1" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]*$' || {
+    echo "不正な base-ref '$1'。" >&2; exit 1; }
 }
 
 cmd_list() {
@@ -57,49 +92,61 @@ cmd_list() {
 }
 
 cmd_remove() {
-  local branch="$1" name
-  name=$(slug "$branch")
-  echo ">> worktree '${WORKTREE_ROOT}/${name}' を削除 (branch '${branch}' は残します)..."
-  docker compose --env-file sandbox.config run --rm -T agent bash -c "
-    git -C /workspace worktree remove --force '${WORKTREE_ROOT}/${name}' 2>/dev/null || true
+  local branch="$1" name wt
+  validate_branch "$branch"
+  name=$(slug "$branch"); wt="${WORKTREE_ROOT}/${name}"
+  docker compose --env-file sandbox.config run --rm -T -e WT="$wt" agent bash -c '
+    if git -C /workspace worktree list --porcelain | grep -qx "worktree $WT"; then
+      git -C /workspace worktree remove --force "$WT" && echo ">> 削除しました: $WT (branch は残ります)"
+    else
+      echo ">> 該当する worktree はありません: $WT"
+    fi
     git -C /workspace worktree prune
-  "
-  echo ">> done"
+  '
 }
+
+# コンテナ内 bootstrap。値は env (WT/BR/BASE/MODE) で渡し、スクリプト本文へは補間しない
+# (branch 名経由のシェルインジェクション防止)。本文に ' を含めないこと (単一引用符で囲うため)。
+BOOT='
+set -e
+export GEM_HOME="$WT/.worker-bundle" BUNDLE_PATH="$WT/.worker-bundle" UV_PYTHON_PREFERENCE=only-system
+git -C /workspace config gc.worktreePruneExpire never
+# 依存の保存先を git status から隠す (配布先 repo の .gitignore に依存しないため自前で)。
+for p in node_modules .venv .worker-bundle; do
+  grep -qxF "$p" /workspace/.git/info/exclude 2>/dev/null || echo "$p" >> /workspace/.git/info/exclude
+done
+# 作業ツリーだけ消えた worktree の admin entry を掃除して自己回復する。--expire=now で
+# gc.worktreePruneExpire=never の影響を受けず確実に。生存 worktree の /workspace パスは
+# コンテナ内で実在するので誤 prune しない。
+git -C /workspace worktree prune --expire=now
+if [ -d "$WT" ] && git -C /workspace worktree list --porcelain | grep -qx "worktree $WT"; then
+  cur=$(git -C "$WT" symbolic-ref --short HEAD 2>/dev/null || true)
+  if [ "$cur" != "$BR" ]; then
+    echo "ERROR: $WT は既にブランチ \"$cur\" を使用中です (要求: \"$BR\")。slug 衝突の可能性。別のブランチ名にするか worker.sh --remove で削除してください。" >&2
+    exit 1
+  fi
+elif git -C /workspace show-ref --verify --quiet "refs/heads/$BR"; then
+  git -C /workspace worktree add "$WT" "$BR" || {
+    echo "ERROR: ブランチ \"$BR\" は別の worktree で使用中の可能性があります (git -C /workspace worktree list で確認)。" >&2
+    exit 1; }
+else
+  git -C /workspace worktree add "$WT" -b "$BR" "$BASE"
+fi
+cd "$WT"
+if [ "$MODE" = shell ]; then exec bash; else exec claude; fi
+'
 
 launch() {
   local mode="$1" branch="$2" base="${3:-HEAD}"
   [ -n "$branch" ] || { usage; exit 1; }
-  local name wt boot final
-  name=$(slug "$branch")
-  wt="${WORKTREE_ROOT}/${name}"
-
-  # コンテナ内 bootstrap: worktree 用意 → status 汚染防止 → cd
-  boot="
-set -e
-git -C /workspace config gc.worktreePruneExpire never
-# gem 保存先 .worker-bundle は .gitignore に無いので info/exclude で隠す (冪等)。
-grep -qxF .worker-bundle /workspace/.git/info/exclude 2>/dev/null || echo .worker-bundle >> /workspace/.git/info/exclude
-if ! git -C /workspace worktree list --porcelain | grep -qx 'worktree ${wt}'; then
-  if git -C /workspace show-ref --verify --quiet 'refs/heads/${branch}'; then
-    git -C /workspace worktree add '${wt}' '${branch}'
-  else
-    git -C /workspace worktree add '${wt}' -b '${branch}' '${base}'
-  fi
-fi
-cd '${wt}'
-"
-  if [ "$mode" = shell ]; then
-    final="${boot} exec bash"
-  else
-    final="${boot} exec claude"
-  fi
+  validate_branch "$branch"
+  validate_base "$base"
+  local name wt
+  name=$(slug "$branch"); wt="${WORKTREE_ROOT}/${name}"
 
   exec docker compose --env-file sandbox.config run --rm -it \
-    -e UV_PYTHON_PREFERENCE=only-system \
-    -e GEM_HOME="${wt}/.worker-bundle" \
-    -e BUNDLE_PATH="${wt}/.worker-bundle" \
-    agent bash -c "${final}"
+    -e WT="$wt" -e BR="$branch" -e BASE="$base" -e MODE="$mode" \
+    agent bash -c "$BOOT"
 }
 
 case "${1:-}" in

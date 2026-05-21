@@ -91,7 +91,7 @@ egress-proxy は 1 つを全 agent で共有し、agent コンテナだけを wo
 | proxy | 1 つを全 worker で共有 (allowlist も共通)。worker を増やしても proxy は増えない |
 | worktree | `/workspace/.git/.worktrees/<name>` に作る。`.git` 配下なので git 追跡対象外、かつホスト側もプロジェクトフォルダ内に収まる |
 | 依存 | `node_modules` / `.venv` / gem は **worktree 内**に置き、worktree が別ディレクトリであることで自然に分離する。pnpm store / uv・npm キャッシュは全 worker で共有 (高速化) |
-| ブランチ | ローカルに無ければ base-ref (省略時 `HEAD`) から新規作成、あれば既存をチェックアウト |
+| ブランチ | ローカルに無ければ base-ref (省略時 `HEAD`) から新規作成、あれば既存をチェックアウト。branch 名は英数始まり `[A-Za-z0-9 . _ / -]` のみ |
 
 依存が worktree 内に閉じるため、worker A と worker B が別バージョンのパッケージを
 入れても干渉しない (共有 named volume を 1 ブランチで使う `run.sh` 単体とは異なる)。
@@ -107,6 +107,11 @@ egress-proxy は 1 つを全 agent で共有し、agent コンテナだけを wo
   は `gc.worktreePruneExpire=never` を自動設定する。
 - worktree 内のファイルは IDE で閲覧・編集できるが、git 操作はコンテナ内
   (worker / `shell.sh`) で行う (上記の理由でホスト git からは扱えない)。
+- `base` 省略時の `HEAD` は **main 側コンテナの現在チェックアウト**。意図したベース
+  (例 `main`) は明示するのが安全。
+- `/workspace` 直下の `node_modules` / `.venv` は **main 用の named volume**。worker は
+  起動時に worktree 内へ `cd` 済みなので通常は触れないが、`/workspace` 直下で
+  install すると main 側を書き換えてしまうので注意。
 - 後始末は `worker.sh --remove <branch>` で (中の依存ごと消える。branch は残る)。
   `clean.sh` では消えない。
 
