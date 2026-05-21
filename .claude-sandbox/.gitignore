@@ -3,6 +3,10 @@ sandbox.config
 .runtime.env
 docker-compose.override.yml
 
+# git push 認証 (mode H): PAT 宣言と発行物。grants.conf.example のみ追跡する
+grants.conf
+git/
+
 proxy/certs/*
 !proxy/certs/.gitkeep
 

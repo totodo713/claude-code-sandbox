@@ -13,6 +13,7 @@ Claude Code (`claude` CLI) を **ネットワーク制限付き Docker コンテ
   人間が開発時に動作確認のためホストでも install するのは OK (詳細は
   [運用注意](#運用注意-install--実行はコンテナ内で-特に-claude-経由))
 - **診断**: `./.claude-sandbox/doctor.sh` (12 項目チェック) / `./.claude-sandbox/logs.sh` (proxy ログ)
+- **git push (任意)**: sandbox から push する時だけ `GIT_AUTH_MODE=H` + `./.claude-sandbox/git-pat.sh` で最小権限の fine-grained PAT を発行する。所有しないリポは fork が本筋、無理ならオーナー発行 PAT。**注意: PAT では `push --force` やブランチ削除を防げない**ので GitHub 側 branch protection / ruleset を必ず設定。方式選定フロー・手順・根拠は **[Git 運用ガイド](docs/git.md)**
 - **詳細**: 下のセクションへ
 
 ## Tips
@@ -77,8 +78,8 @@ Claude Code (`claude` CLI) を **ネットワーク制限付き Docker コンテ
 | `CLAUDE_AUTH_MODE` | `A` ホスト認証情報をコピー / `B` コンテナ内 claude login / `C` API key |
 | `HOST_CLAUDE_DIR` | mode A 時のコピー元ホスト `.claude` パス |
 | `ANTHROPIC_API_KEY` | mode C 時の API key |
-| `GIT_AUTH_MODE` | `N` push 無効 (default) / `H` ホスト `~/.gitconfig` と `~/.git-credentials` を read-only mount |
-| `GIT_USER_NAME` / `GIT_USER_EMAIL` | mode H 時の commit author 上書き。空ならマウントした `.gitconfig` の値を使う |
+| `GIT_AUTH_MODE` | `N` push 無効 (default) / `H` sandbox 専用 fine-grained PAT (`git-pat.sh` で発行) を read-only mount |
+| `GIT_USER_NAME` / `GIT_USER_EMAIL` | mode H 時の commit author 上書き。空ならホストの `git config user.*` を流用 (生成 `git/gitconfig` に焼き込む) |
 | `LANG_PACK` | `ruby,node,python,bun` のカンマ区切り (検出は自動)。変更時は `build agent` 必要 |
 | `RUBY_VERSION` | プロジェクトの Ruby バージョン。`.ruby-version`→Gemfile から自動検出。変更時は `build agent` 必要 |
 | `NODE_VERSION` | プロジェクトの Node バージョン。`.nvmrc`→`.node-version`→`package.json` から自動検出。`X`/`X.Y`/`X.Y.Z`/`lts` 可。変更時は `build agent` 必要 |
@@ -127,37 +128,20 @@ writable で永続化）。違いは **認証情報の入手方法だけ**。
 
 ## git push 認証 (`GIT_AUTH_MODE`)
 
-sandbox 内から `git push` できるかを切り替える。デフォルトは `N` (push 不可、
-clone / fetch / pull は github が core allowlist に入っているのでそのまま動く)。
-push したいときだけ `H` を選んでホストの credential を read-only mount する。
+sandbox 内から `git push` / PR 作成をするかを切り替える。デフォルトは `N` (push 不可、
+clone / fetch / pull は github が core allowlist に入っているのでそのまま動く)。push
+したいときだけ `H` を選び、**sandbox 専用の最小権限 fine-grained PAT** (`git-pat.sh` が
+発行) を read-only mount する。ホストの `~/.gitconfig` / `~/.git-credentials` やキーチェーンは
+コンテナに一切持ち込まない (case A)。
 
-| | N: 無効 (default) | H: ホスト credential を read-only mount |
-|---|---|---|
-| sandbox 内での push | ✗ | ✓ |
-| 認証情報の場所 | — | ホスト `~/.gitconfig` + `~/.git-credentials` を ro mount |
-| コンテナへの焼き込み | — | なし (image / volume には残らない) |
-| 前提 | — | ホストで `credential.helper=store` を使っていること |
+方式選定はリポの所有者で決まる:
 
-### Mode H の使い方
+- **自分 / 所属 org のリポ** → 自己発行 PAT (`git-pat.sh`)
+- **他人の個人リポ (collaborator)** → **fork が本筋** (自分の fork に push)、fork したくなければ
+  **オーナー発行 PAT** (`git-pat.sh --owner-issued`)
+- **SSH / 専用 sidecar は不採用** (独立監査を失い内容検査もできないため)
 
-```bash
-# 1. ホストで credential.helper=store にして、認証情報を ~/.git-credentials に書き出す
-git config --global credential.helper store
-git push    # 初回に認証を聞かれ、HTTPS + token が ~/.git-credentials に保存される
-            # (fine-grained PAT 推奨。下記「注意」参照)
-
-# 2. setup.sh / --reconfigure で GIT_AUTH_MODE=H を選ぶ
-./.claude-sandbox/setup.sh --reconfigure
-```
-
-### Mode H の前提と注意
-
-- **`credential.helper=store` 専用**。macOS keychain / Windows manager は file 読み取りができないため非対応。`store` への切替が必要。
-- **`GIT_USER_NAME` / `GIT_USER_EMAIL` で identity を上書き可能**。空ならマウントした `.gitconfig` の user.name/email がそのまま使われる。bot 用 identity を分けたいときに指定する。
-- **fine-grained PAT を強く推奨**。`repo` 全権の classic PAT を `~/.git-credentials` に置くと、sandbox 内の agent から **全 repo に push 可能**になる。blast radius を最小にするため、push したい単一 repo に絞った PAT を発行すること。
-- **branch protection はサーバ側で**。agent が `git push --force` を物理的に発火するのを sandbox 側で止めるのは難しい。GitHub 側の branch protection / required reviews を最終防衛線にする。
-- **mitmproxy が HTTPS を復号する**。push の本文 (差分) は proxy で一瞬平文になる。自分のインフラを通すだけだが、設定次第ではログに残せる構造なので意識しておく。
-- **将来の追加候補**: SSH agent forwarding (鍵をホスト側 ssh-agent に残し socket だけ転送) / コンテナ内 `gh auth login`。現状は実装せず、Mode H で困った具体例が出てから検討する。
+→ **決定フローチャート・ケース別手順・セキュリティ根拠は [Git 運用ガイド](docs/git.md) を参照。**
 
 > sandbox 外でユーザー自身が push できる場合は **Mode N のまま使う方が安全**。
 > sandbox 内に credential を露出させる必要がそもそも無い。
@@ -418,6 +402,7 @@ cd /path/to/other-repo
 - `proxy/certs/*` (mitmproxy CA)
 - `volumes/` 中身
 - `auth/claude-config/*` と `auth/claude-config.json`
+- `git/` (mode H の PAT credential と生成 gitconfig。`grants.conf` は残す)
 
 named volume (`bundle-cache` 等) はこのスクリプトでは消さない。完全に
 クリーンにしたい時は別途:
@@ -431,12 +416,16 @@ docker compose --env-file sandbox.config down -v
 | パス | 役割 | commit? |
 |---|---|---|
 | `setup.sh` `run.sh` `shell.sh` `logs.sh` `doctor.sh` `copy-to.sh` `clean.sh` | エントリポイント | yes |
+| `git-pat.sh` | mode H 用 fine-grained PAT 発行支援 (ホストで実行) | yes |
 | `docker-compose.yml` `Dockerfile.agent` | 基盤 | yes |
 | `proxy/allowlist_addon.py` | mitmproxy addon | yes |
+| `docs/git.md` | Git 運用ガイド (方式選定フロー・手順・セキュリティ根拠) | yes |
 | `allowlist/core.txt` `lang-*.txt` | 固定 allowlist | yes |
 | `allowlist/allowlist.d/extra.txt` | プロジェクト固有 | yes |
-| `sandbox.config.example` | テンプレ | yes |
+| `sandbox.config.example` `grants.conf.example` | テンプレ | yes |
 | `sandbox.config` | 実設定 (秘密含む) | **no** |
+| `grants.conf` | PAT 許可範囲の宣言 (トークン本体は含まない) | **no** |
+| `git/credentials` `git/gitconfig` | mode H の PAT と生成 gitconfig | **no** |
 | `docker-compose.override.yml` | 自動生成 | **no** |
 | `.runtime.env` | 自動生成 | **no** |
 | `proxy/certs/` | mitmproxy CA | **no** |

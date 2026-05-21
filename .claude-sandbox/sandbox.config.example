@@ -24,16 +24,19 @@ ANTHROPIC_API_KEY=__ANTHROPIC_API_KEY__
 
 # ---- git push 認証: N | H ----
 # N: 無効 (push できない。clone / fetch / pull はそのまま使える)
-# H: ホストの ~/.gitconfig と ~/.git-credentials を read-only mount
-#    前提: ホスト側で `credential.helper=store` を使っていること
-#    (macOS keychain / Windows manager は読めないため対象外)
-# 将来追加候補: SSH agent forwarding / gh login (現状は N と H のみ)
+# H: sandbox 専用の fine-grained PAT を read-only mount する。
+#    PAT は `./git-pat.sh` で発行し git/credentials に書き出す (grants.conf で
+#    許可範囲を宣言)。コンテナ用 git/gitconfig は setup.sh が生成する。
+#    ホストの ~/.gitconfig / ~/.git-credentials やキーチェーンには触れない (case A)。
+#    → ホスト側は GCM / keychain など好きな方式を独立して使ってよい。
+# 将来追加候補: SSH agent forwarding / GitHub App の短命トークン
 GIT_AUTH_MODE=__GIT_AUTH_MODE__
 
-# git commit の author 上書き (空ならホスト ~/.gitconfig の user.name/email を使う)。
-# 個人 host config と別の identity で commit したいときに指定する。
-GIT_USER_NAME=__GIT_USER_NAME__
-GIT_USER_EMAIL=__GIT_USER_EMAIL__
+# sandbox コンテナ内 commit の author。setup.sh が対話時にホストの `git config --global
+# user.name/email` をデフォルト提示し、確認/上書きした値がここに入る。空のままだと
+# コンテナ内 commit は identity 未設定で失敗するので注意 (生成 git/gitconfig の [user] に焼き込む)。
+GIT_USER_NAME="__GIT_USER_NAME__"
+GIT_USER_EMAIL="__GIT_USER_EMAIL__"
 
 # ---- 言語ランタイム (カンマ区切り複数可: ruby,node,python,bun) ----
 # ここで選んだ言語の実行系を /opt/runtimes/<lang> に導入し、PATH 先頭に置く。

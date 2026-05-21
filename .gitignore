@@ -14,3 +14,5 @@
 .claude-sandbox/auth/claude-config/*
 !.claude-sandbox/auth/claude-config/.gitkeep
 .claude-sandbox/auth/claude-config.json
+.claude-sandbox/grants.conf
+.claude-sandbox/git/

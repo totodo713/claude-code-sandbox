@@ -14,6 +14,8 @@
 #   - proxy/certs/* (mitmproxy CA) を削除 (.gitkeep は残す)
 #   - volumes/ 中身を削除 (mitmproxy フロー記録など)
 #   - auth/claude-config/* と auth/claude-config.json を削除 (.gitkeep は残す)
+#   - git/ (mode H の PAT credential と生成 gitconfig) を削除
+#     ※ grants.conf (許可範囲の宣言。トークン本体は含まない) は残す
 #
 # 注意:
 #   docker named volume (bundle-cache / node-modules-cache / venv-cache 等)
@@ -34,6 +36,9 @@ rm -fv auth/claude-config.json 2>/dev/null || true
 
 # volumes/ 中身 (.gitkeep が無い構造なので mindepth 1 で全消し)
 find volumes -mindepth 1 -delete 2>/dev/null || true
+
+# git/ — mode H の PAT credential と生成 gitconfig (grants.conf は残す)
+rm -rfv git 2>/dev/null || true
 
 echo ""
 echo "次の手順:"

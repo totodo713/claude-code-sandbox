@@ -1,0 +1,51 @@
+# ============================================================
+# fine-grained PAT 発行の宣言ファイル (sandbox コンテナ用 / case A)
+#
+# `grants.conf` という名前でコピーして編集し、`./git-pat.sh` で発行する。
+# ここに書くのはトークンそのものではなく「何を許可するか」の宣言。
+# Claude Code と相談しながら最小権限に絞る前提。実 grants.conf は .gitignore 済み。
+#
+#   cp grants.conf.example grants.conf
+#   $EDITOR grants.conf
+#   ./git-pat.sh                 # 自分/org のリポ、または自分の fork を自己発行
+#   ./git-pat.sh --owner-issued  # 他人の個人リポ: オーナーに発行依頼するテキストを出力
+#
+# 方式選定 (どのリポに何で push するか) は docs/git.md の決定フローを参照。
+#
+# 編集必須: RESOURCE_OWNER と REPOSITORIES。プレースホルダー (<owner> 等) のままだと
+#           git-pat.sh が検証で弾くので、未編集の誤発行は起きない。他の項目は保守的な
+#           デフォルトにしてあるので、基本はそのままで良い。
+#
+# PAT では防げないこと: push --force やブランチ削除は fine-grained PAT で禁止できない
+#           (Contents:write が通常 push も force push も両方許可するため)。これらを
+#           止めるのはサーバ側の branch protection / ruleset ("Block force pushes" /
+#           "Restrict deletions") の役目。push 認証を sandbox に渡す前に設定しておくこと。
+# ============================================================
+
+# トークンの owner = リポジトリ所有者。fine-grained PAT はこの owner 所有のリポしか対象にできない。
+#   自己発行          : 自分の login or 所属 org 名 (自分の fork なら自分の login)
+#   --owner-issued    : 相手 (他人の個人リポのオーナー) の login。オーナーがこれを選んで発行する
+RESOURCE_OWNER="<owner>"
+
+# このトークンでアクセスを許可するリポジトリ。owner/name をスペース区切りで複数可。
+# 1 トークンで複数リポを束ねられる (発行 UI で複数選択する形になる)。
+# fork ワークフローなら自分の fork (you/repo) を指定する。
+REPOSITORIES="<owner>/<repo>"
+
+# 付与する権限。NAME:LEVEL を空白区切り (LEVEL = read | write)。
+#   contents      : コードの読み書き。branch の push には write が必須
+#   metadata      : 常に必須 (GitHub が自動付与。read のままで良い)
+#   pull_requests : 同じトークンで PR を作る場合に write (gh pr create / API)。
+#                   fork + 人/CI が PR を作る運用なら不要 (contents:write だけでよい)
+#   workflows     : .github/workflows を変更する場合のみ write を足す
+# 必要最小限に絞るほど、トークン漏洩時の被害 (blast radius) が小さい。
+PERMISSIONS="contents:write pull_requests:write metadata:read"
+
+# 有効期限 (日数)。短いほど漏洩時の窓が狭い。期限切れたら git-pat.sh を再実行。
+EXPIRY_DAYS=30
+
+# 検証用の対照リポジトリ (任意)。git-pat.sh がこのリポに「アクセスできない」ことを
+# 実測し、スコープが広すぎないかを確認する。空なら負テストをスキップ。
+# 自分が見えるが REPOSITORIES に含めていない別リポを指定すると効果的。
+# 例: DENY_CONTROL_REPO="<owner>/<other-repo>"
+DENY_CONTROL_REPO=""
