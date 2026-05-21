@@ -82,6 +82,7 @@ egress-proxy は 1 つを全 agent で共有し、agent コンテナだけを wo
 ./.claude-sandbox/worker.sh --shell fix/issue-123   # bash で入る (デバッグ)
 ./.claude-sandbox/worker.sh --list                  # worktree 一覧
 ./.claude-sandbox/worker.sh --remove fix/issue-123  # worktree と中の依存を削除 (branch は残す)
+./.claude-sandbox/worker.sh --reset                 # ホストリポの worker.sh 由来 .git 変更を戻す
 ```
 
 ### 仕組みと隔離
@@ -116,7 +117,18 @@ egress-proxy は 1 つを全 agent で共有し、agent コンテナだけを wo
   配下に実体化**する。worktree が別ディレクトリであることで分離する設計で、`.git` 配下
   ゆえ git 追跡されず、`worker.sh --remove` で worktree ごと回収される。
 - 後始末は `worker.sh --remove <branch>` で (中の依存ごと消える。branch は残る)。
-  `clean.sh` では消えない。
+  **`--remove` は `--force` 相当で、worktree 内の未コミット変更も無警告で破棄する**
+  (worktree には常に untracked な依存が居るため非 force では消せない)。実装中の作業は
+  push / commit してから消すこと。`clean.sh` は一括リセット用途なので worktree には触れない。
+- **ホストリポ本体への副作用 (要注意)**: worker.sh は worktree 維持のため、外側の
+  プロジェクトの `.git` を初回起動時に書き換える。これらは `.claude-sandbox/` の外なので
+  `clean.sh` では戻らず、サンドボックスを消しても残る。
+  - `.git/config` に `gc.worktreePruneExpire=never` (ホスト git の誤 prune 防止)。
+  - `.git/info/exclude` に `node_modules` / `.venv` / `.worker-bundle` を追記。これは
+    **全 worktree (main 含む) で共有**されるため、配布先リポで入れ子の `node_modules`
+    等を持つ場合は main 側の `git status` からも隠れる点に注意。
+  - 全 worker worktree を `--remove` した後、`worker.sh --reset` でこれらの変更を取り消せる
+    (worktree が残っている間は gc 保護を外せないため `--reset` は失敗する)。
 
 ## 設定ファイル: `sandbox.config`
 

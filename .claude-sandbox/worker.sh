@@ -10,6 +10,7 @@
 #   ./worker.sh --shell <branch> [base]  同上だが bash で入る (デバッグ用)
 #   ./worker.sh --list                   登録済み worktree を一覧
 #   ./worker.sh --remove <branch>        worktree (と中の依存) を削除 (branch は残す)
+#   ./worker.sh --reset                  ホストリポの worker.sh 由来 .git 変更を戻す
 #
 # 例:
 #   ./worker.sh fix/issue-123 main       main から fix/issue-123 を切って worker 起動
@@ -35,6 +36,8 @@
 #     /opt/runtimes/python を使わせる。
 #   - ホスト git でうっかり prune しないよう gc.worktreePruneExpire=never を立てる
 #     (worktree の記録パス /workspace/... はホストに存在せず prune 対象に見える)。
+#   - 上記の gc 設定と .git/info/exclude 追記は **ホストリポ本体への恒久変更** (.git/config /
+#     .git/info/exclude) で、clean.sh では戻らない。--reset で明示的に取り消せる。
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -54,6 +57,9 @@ worker.sh — worktree 単位で隔離した worker claude をサンドボック
   ./worker.sh --shell <branch> [base]  同上だが bash で入る (デバッグ用)
   ./worker.sh --list                   登録済み worktree を一覧
   ./worker.sh --remove <branch>        worktree (と中の依存) を削除 (branch は残す)
+  ./worker.sh --reset                  ホストリポの worker.sh 由来 .git 変更を戻す
+
+注意: --remove は worktree 内の未コミット変更も破棄する (push/commit 済みか確認)。
 
 例:
   ./worker.sh fix/issue-123 main       main から fix/issue-123 を切って worker 起動
@@ -83,13 +89,17 @@ validate_branch() {
 }
 
 # base-ref を検証 (env 渡しなので注入はしないが、明らかに不正な値は早期に弾く)。
+# validate_branch と同じく [[ =~ ]] で文字列全体を評価し、改行入りの値も弾く
+# (grep -E の行単位マッチだとすり抜ける)。
 validate_base() {
-  printf '%s' "$1" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]*$' || {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]*$ ]] || {
     echo "不正な base-ref '$1'。" >&2; exit 1; }
 }
 
+# worktree の参照・削除・reset は egress-proxy を必要としないので --no-deps で proxy を
+# 起こさず実行する (proxy のビルド/ヘルスチェック待ちを避ける)。
 cmd_list() {
-  docker compose --env-file sandbox.config run --rm -T agent \
+  docker compose --env-file sandbox.config run --rm -T --no-deps agent \
     git -C /workspace worktree list
 }
 
@@ -97,13 +107,47 @@ cmd_remove() {
   local branch="$1" name wt
   validate_branch "$branch"
   name=$(slug "$branch"); wt="${WORKTREE_ROOT}/${name}"
-  docker compose --env-file sandbox.config run --rm -T -e WT="$wt" agent bash -c '
+  docker compose --env-file sandbox.config run --rm -T --no-deps -e WT="$wt" agent bash -c '
     if git -C /workspace worktree list --porcelain | grep -qx "worktree $WT"; then
       git -C /workspace worktree remove --force "$WT" && echo ">> 削除しました: $WT (branch は残ります)"
     else
       echo ">> 該当する worktree はありません: $WT"
     fi
-    git -C /workspace worktree prune
+    # gc.worktreePruneExpire=never の影響を受けず確実に admin entry を掃除する。
+    git -C /workspace worktree prune --expire=now
+  '
+}
+
+# worker.sh がホストリポ本体 (/workspace/.git) に残す恒久変更を取り消す。
+# worktree が残っていると gc 保護を外した瞬間にホスト git の prune 対象になるため、
+# 先に全 worker worktree を --remove させてから実行させる。
+cmd_reset() {
+  docker compose --env-file sandbox.config run --rm -T --no-deps -e WROOT="$WORKTREE_ROOT" agent bash -c '
+    set -e
+    remaining=$(git -C /workspace worktree list --porcelain | sed -n "s/^worktree //p" | grep -F "$WROOT/" || true)
+    if [ -n "$remaining" ]; then
+      echo "ERROR: worker worktree がまだ残っています。先に worker.sh --remove で削除してください:" >&2
+      echo "$remaining" >&2
+      exit 1
+    fi
+    if git -C /workspace config --unset gc.worktreePruneExpire 2>/dev/null; then
+      echo ">> gc.worktreePruneExpire を解除しました"
+    else
+      echo ">> gc.worktreePruneExpire は未設定 (skip)"
+    fi
+    excl=/workspace/.git/info/exclude
+    if [ -f "$excl" ]; then
+      tmp=$(mktemp)
+      grep -vxF -e node_modules -e .venv -e .worker-bundle "$excl" > "$tmp" || true
+      if cmp -s "$excl" "$tmp"; then
+        echo ">> .git/info/exclude に worker の追記行なし (skip)"
+      else
+        cat "$tmp" > "$excl"
+        echo ">> .git/info/exclude から node_modules / .venv / .worker-bundle を除去しました"
+      fi
+      rm -f "$tmp"
+    fi
+    echo ">> reset 完了。worker.sh 由来のホストリポ変更を戻しました。"
   '
 }
 
@@ -158,6 +202,7 @@ launch() {
 case "${1:-}" in
   --list)        cmd_list ;;
   --remove)      shift; [ -n "${1:-}" ] || { usage; exit 1; }; cmd_remove "$1" ;;
+  --reset)       cmd_reset ;;
   --shell)       shift; launch shell "${1:-}" "${2:-}" ;;
   -h|--help|"")  usage ;;
   *)             launch claude "$1" "${2:-}" ;;
