@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(**/.env)",
+      "Edit(**/.env)",
+      "Write(**/.env)",
+      "Read(**/.env.*)",
+      "Edit(**/.env.*)",
+      "Write(**/.env.*)",
+      "Read(**/*.pem)",
+      "Edit(**/*.pem)",
+      "Write(**/*.pem)",
+      "Read(**/*.key)",
+      "Edit(**/*.key)",
+      "Write(**/*.key)",
+      "Read(**/*.crt)",
+      "Edit(**/*.crt)",
+      "Write(**/*.crt)",
+      "Read(**/*.cer)",
+      "Edit(**/*.cer)",
+      "Write(**/*.cer)",
+      "Read(**/*.p12)",
+      "Edit(**/*.p12)",
+      "Write(**/*.p12)",
+      "Read(**/*.pfx)",
+      "Edit(**/*.pfx)",
+      "Write(**/*.pfx)",
+      "Read(**/id_rsa)",
+      "Edit(**/id_rsa)",
+      "Write(**/id_rsa)",
+      "Read(**/id_ed25519)",
+      "Edit(**/id_ed25519)",
+      "Write(**/id_ed25519)",
+      "Read(**/id_ecdsa)",
+      "Edit(**/id_ecdsa)",
+      "Write(**/id_ecdsa)"
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+# Claude Code (ripgrep) が常に尊重する ignore。
+# 検索・@補完・コンテキスト取り込みから秘密ファイルを除外する。
+# 「アクセスそのものの遮断」は .claude/settings.json の permissions.deny 側で担保。
+
+# .env 系（テンプレートは閲覧できるよう除外）
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# 鍵・証明書
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+
+# SSH 秘密鍵
+id_rsa
+id_ed25519
+id_ecdsa
