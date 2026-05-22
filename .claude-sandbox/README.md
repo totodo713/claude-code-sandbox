@@ -348,12 +348,39 @@ Ruby (bundle) は `/opt/bundle` というコンテナ専用パスにインスト
 |---|---|---|---|
 | `PKG_TOOL_PYTHON` | `uv` / `pip` | `uv.lock` → uv / `requirements.txt` → pip | `poetry` / `pipenv` |
 | `PKG_TOOL_NODE` | `npm` / `pnpm` / `yarn` / `bun` | `bun.lock(b)` → bun / `pnpm-lock.yaml` → pnpm / `yarn.lock` → yarn / `package.json` の `packageManager` → 該当ツール、それ以外 → npm | — |
+| `PKG_TOOL_NODE_VERSION` | 任意のバージョン (例 `8.15.0`) | `package.json` の `packageManager` が選択ツールと一致するときその `@` 以降 (なければ空) | — |
+| `PKG_TOOL_NODE_ALLOW_UNSIGNED` | `1`/`true`/`yes` で corepack 署名検証を無効化 (既定 空=無効化しない) | 自動検出しない (手動 opt-in) | — |
 
 `Dockerfile.agent` の各言語ブランチに `case "$PKG_TOOL_<LANG>" in ... esac`
 の枠があり、新ツール対応はこの case にブランチを足すだけ。実装枠外を指定すると
 build 時にエラーになる。poetry / pipenv 等を足したい時は、既存の `uv` /
 `pnpm` / `yarn` (corepack 経由) や `bun` (curl install) ブランチを参考に同じ
 パターンでブランチを追加する。
+
+#### pnpm / yarn のバージョン固定と corepack の rescue
+
+`PKG_TOOL_NODE` が `pnpm` / `yarn` のとき、build は corepack でパッケージ
+マネージャを有効化する。`PKG_TOOL_NODE_VERSION` が空なら `pnpm@latest` /
+`yarn@stable` を、指定があればそのバージョンを corepack に渡す。
+
+古い (EOL) Node を `NODE_VERSION` に指定すると、`@latest` の pnpm/yarn が Node と
+ランタイム非互換になりやすく、また Node 同梱の古い corepack が dist-tag 解決や
+npm registry の署名検証 (鍵ローテーション後の stale keys) で失敗し、build が落ちる
+ことがある (例: Node 18.2.0)。対策は 2 つ:
+
+- **バージョン固定**: `package.json` の `packageManager`
+  (例 `"packageManager": "pnpm@8.15.0"`) を置くと `setup.sh` が自動検出する。
+  Node と互換な版を固定すれば build / 実行とも安定する。
+- **corepack の自動 rescue**: `_corepack-activate` ヘルパが、同梱 corepack で失敗
+  したら corepack を動作既知版へ更新して再試行する (`Dockerfile.agent`)。鍵が新しい
+  Node では 1 段目で成功し署名検証も有効なまま。
+
+それでも署名検証を通せない場合、build は**既定で停止**し、固定版の指定方法を案内する。
+build は egress allowlist の外 (ホストの docker daemon が直接 registry を引く) で走るため、
+署名検証はサプライチェーン整合性の唯一の防御であり、自動では下げない。どうしても検証
+なしで通す必要があるときだけ、`sandbox.config` に `PKG_TOOL_NODE_ALLOW_UNSIGNED=1` を
+設定して再 build する (`COREPACK_INTEGRITY_KEYS=0` 相当。整合性は保証されない)。まずは
+`PKG_TOOL_NODE_VERSION` で Node 互換の固定版を指定する方を検討すること。
 
 volume の中身は `docker volume inspect` や、コンテナ内 `ls /opt/bundle` で確認可。
 リセットしたい場合:

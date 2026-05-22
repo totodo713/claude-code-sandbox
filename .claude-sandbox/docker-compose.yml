@@ -43,6 +43,8 @@ services:
         BUN_VERSION: ${BUN_VERSION:-}
         PKG_TOOL_PYTHON: ${PKG_TOOL_PYTHON:-uv}
         PKG_TOOL_NODE: ${PKG_TOOL_NODE:-npm}
+        PKG_TOOL_NODE_VERSION: ${PKG_TOOL_NODE_VERSION:-}
+        PKG_TOOL_NODE_ALLOW_UNSIGNED: ${PKG_TOOL_NODE_ALLOW_UNSIGNED:-}
     image: ${PROJECT_NAME:-claude-sandbox}-agent:latest
     container_name: ${PROJECT_NAME:-claude-sandbox}-agent
     depends_on:

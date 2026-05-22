@@ -19,6 +19,13 @@ ARG BUN_VERSION=
 # 現状: python={uv,pip}, node={npm,pnpm,yarn,bun}。
 ARG PKG_TOOL_PYTHON=uv
 ARG PKG_TOOL_NODE=npm
+# pnpm / yarn を corepack に固定するバージョン (例 8.15.0)。
+# 空なら pnpm=latest / yarn=stable に既定する (_corepack-activate 参照)。
+ARG PKG_TOOL_NODE_VERSION=
+# corepack の署名検証をどうしても通せない時に検証を無効化して build を通す opt-in。
+# 既定 (空) では検証失敗時に build を止める。build は allowlist の外で走るため、
+# 署名検証はサプライチェーン整合性の唯一の防御。真 (1/true/yes) のときだけ無効化する。
+ARG PKG_TOOL_NODE_ALLOW_UNSIGNED=
 
 ENV DEBIAN_FRONTEND=noninteractive
 # corepack (pnpm/yarn 用 shim) の作業ディレクトリを共有可能な場所に置き、
@@ -75,6 +82,69 @@ echo "$v"
 EOF
 RUN chmod +x /usr/local/bin/_resolve-python
 
+# corepack で node 用パッケージマネージャ (pnpm/yarn) を有効化・固定するヘルパ。
+# 古い Node 同梱の corepack は dist-tag (latest/stable) 解決や npm registry の
+# 署名検証 (鍵ローテーション後の stale keys) で失敗し、build が落ちる。失敗時は
+# corepack を既知の動作版へ更新して再試行する。鍵が新しい Node では 1 段目で成功。
+# 署名検証まで通せない場合は既定では build を止め、PKG_TOOL_NODE_ALLOW_UNSIGNED が
+# 真のときだけ検証を無効化して通す (build は allowlist の外で走るため、署名検証は
+# サプライチェーン整合性の唯一の防御。自動では下げない)。
+#   $1 = pm 名 (pnpm|yarn)   $2 = バージョン (例 8.15.0、空なら latest/stable)
+#   env PKG_TOOL_NODE_ALLOW_UNSIGNED=1/true/yes で 3 段目 (検証無効) を opt-in 解禁
+COPY <<'EOF' /usr/local/bin/_corepack-activate
+#!/bin/sh
+set -eu
+pm="$1"
+ver="${2:-}"
+if [ -z "$ver" ]; then
+  case "$pm" in yarn) ver=stable ;; *) ver=latest ;; esac
+fi
+spec="${pm}@${ver}"
+# 2 段目で導入する corepack の救済版。Node 18.17+/20/22+ で動く既知版を 1 箇所で管理。
+rescue_ver=0.33.0
+
+# enable + prepare を 1 単位に。各段でこれを呼ぶことで enable も失敗ハンドリングに含め、
+# 2 段目で corepack を差し替えた後の shim 貼り直しも担保する。
+try_activate() {
+  corepack enable "$pm" && corepack prepare "$spec" --activate
+}
+
+# 1) まず同梱 corepack で試す (鍵が新しい Node ではここで成功し署名検証も有効)。
+if try_activate; then exit 0; fi
+echo "WARN[_corepack-activate]: 'corepack ${spec}' 失敗。corepack を更新して再試行。" >&2
+
+# 2) corepack を動作既知版へ更新して再試行。
+#    (古い Node 同梱版の stale keys / dist-tag バグを回避。engines 不一致は npm の
+#     既定 (engine-strict=false) では警告止まりで導入され、実体は同一コードなので
+#     古い 18.x patch でも動作する。)
+npm install -g --force "corepack@${rescue_ver}" || true
+hash -r 2>/dev/null || true
+if try_activate; then exit 0; fi
+
+# 3) ここまで失敗 = 署名検証を通せない。既定では build を止める。検証無効化は
+#    サプライチェーン整合性を下げるため、PKG_TOOL_NODE_ALLOW_UNSIGNED が真のときだけ。
+case "${PKG_TOOL_NODE_ALLOW_UNSIGNED:-}" in
+  1|true|TRUE|yes|YES) allow_unsigned=1 ;;
+  *) allow_unsigned=0 ;;
+esac
+if [ "$allow_unsigned" != 1 ]; then
+  cat >&2 <<MSG
+ERROR[_corepack-activate]: corepack で ${spec} を有効化できませんでした (署名検証に失敗)。
+  build はネットワーク allowlist の外で走るため、署名検証はサプライチェーン整合性の
+  唯一の防御です。自動では無効化しません。次のいずれかで対処してください:
+    - package.json の "packageManager" に Node 互換の固定版を指定する
+      (例: "packageManager": "${pm}@<version>")
+    - どうしても検証なしで通す場合のみ、sandbox.config に
+      PKG_TOOL_NODE_ALLOW_UNSIGNED=1 を設定して再 build する (整合性は保証されない)
+MSG
+  exit 1
+fi
+echo "WARN[_corepack-activate]: PKG_TOOL_NODE_ALLOW_UNSIGNED=1 のため署名検証を無効化して再試行 (サプライチェーン整合性は保証されない)。" >&2
+export COREPACK_INTEGRITY_KEYS=0
+try_activate
+EOF
+RUN chmod +x /usr/local/bin/_corepack-activate
+
 # ── Claude Code CLI 本体を公式ネイティブインストーラで導入 ──
 # 配布物は Node 内蔵の自己完結バイナリ。実行時に Node 不要なので、プロジェクトが
 # 別 Node を PATH 先頭に置いても無傷。インストーラは ~/.local/bin/claude を
@@ -104,14 +174,14 @@ RUN set -eu; \
             pnpm) \
               mkdir -p /opt/corepack; \
               export PATH="/opt/runtimes/node/bin:$PATH"; \
-              corepack enable pnpm; \
-              corepack prepare pnpm@latest --activate; \
+              PKG_TOOL_NODE_ALLOW_UNSIGNED="${PKG_TOOL_NODE_ALLOW_UNSIGNED:-}" \
+                _corepack-activate pnpm "${PKG_TOOL_NODE_VERSION:-}"; \
               chown -R "$UID:$GID" /opt/corepack ;; \
             yarn) \
               mkdir -p /opt/corepack; \
               export PATH="/opt/runtimes/node/bin:$PATH"; \
-              corepack enable yarn; \
-              corepack prepare yarn@stable --activate; \
+              PKG_TOOL_NODE_ALLOW_UNSIGNED="${PKG_TOOL_NODE_ALLOW_UNSIGNED:-}" \
+                _corepack-activate yarn "${PKG_TOOL_NODE_VERSION:-}"; \
               chown -R "$UID:$GID" /opt/corepack ;; \
             bun) \
               apt-get update && apt-get install -y --no-install-recommends unzip; \
@@ -168,7 +238,7 @@ RUN set -eu; \
         *) echo "Unknown LANG_PACK entry: $pack" >&2; exit 1 ;; \
       esac; \
     done; \
-    rm -f /usr/local/bin/_resolve-node /usr/local/bin/_resolve-python
+    rm -f /usr/local/bin/_resolve-node /usr/local/bin/_resolve-python /usr/local/bin/_corepack-activate
 
 # mitmproxy CA を信頼チェーンに追加 (setup.sh が事前に生成)
 COPY proxy/certs/ /tmp/sandbox-ca/
