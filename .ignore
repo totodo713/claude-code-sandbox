@@ -21,3 +21,14 @@
 id_rsa
 id_ed25519
 id_ecdsa
+
+# その他の機密（認証情報・鍵束・VPN 等）
+.envrc
+*.jks
+*.keystore
+.netrc
+_netrc
+*.p8
+*.ovpn
+*.gpg
+service-account*.json
