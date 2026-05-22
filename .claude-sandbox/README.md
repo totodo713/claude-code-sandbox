@@ -60,11 +60,82 @@ Claude Code (`claude` CLI) を **ネットワーク制限付き Docker コンテ
 
 # 補助
 ./.claude-sandbox/shell.sh         # コンテナに bash で入る
+./.claude-sandbox/worker.sh <branch> # worktree 単位で隔離した worker を起動 (後述)
 ./.claude-sandbox/logs.sh          # proxy ログ tail
 ./.claude-sandbox/doctor.sh        # 環境診断
 ./.claude-sandbox/copy-to.sh <dst> # 他リポへ .claude-sandbox/ をコピー
 ./.claude-sandbox/clean.sh         # setup 生成物を消して初期状態に戻す
 ```
+
+## マルチエージェント開発 (`worker.sh`)
+
+Main agent (`run.sh`) を planning / レビュー担当に、worker agent を issue 実装担当に
+分け、**worker ごとに別ブランチ・別 worktree で並行**させるための仕組み。
+egress-proxy は 1 つを全 agent で共有し、agent コンテナだけを worker 数ぶん起動する。
+
+```bash
+# main 側 (パートナー: planning / 受け入れ確認)
+./.claude-sandbox/run.sh
+
+# worker 側 (別ターミナルで issue ごとに)
+./.claude-sandbox/worker.sh fix/issue-123 main      # main から fix/issue-123 を切って起動
+./.claude-sandbox/worker.sh fix/issue-123 --resume  # 既存ブランチで前回セッションを再開
+./.claude-sandbox/worker.sh --shell fix/issue-123   # bash で入る (デバッグ)
+./.claude-sandbox/worker.sh --list                  # worktree 一覧
+./.claude-sandbox/worker.sh --remove fix/issue-123  # worktree と中の依存を削除 (branch は残す)
+./.claude-sandbox/worker.sh --reset                 # ホストリポの worker.sh 由来 .git 変更を戻す
+```
+
+`<branch> [base-ref]` の後ろに付けた引数 (`-` 始まり、または base の後ろ) は
+`claude` にそのまま転送される (例: `--resume` / `--model` など)。base-ref は
+`claude` 引数と区別するため `-` 始まりにできない。
+
+### 仕組みと隔離
+
+| 項目 | 挙動 |
+|---|---|
+| proxy | 1 つを全 worker で共有 (allowlist も共通)。worker を増やしても proxy は増えない |
+| worktree | `/workspace/.git/.worktrees/<name>` に作る (`<name>` = branch 名の slug + 衝突回避ハッシュ)。`.git` 配下なので git 追跡対象外、かつホスト側もプロジェクトフォルダ内に収まる。複数 worker 同時起動時の `.git` 更新は flock で直列化する |
+| 依存 | `node_modules` / `.venv` / gem は **worktree 内**に置き、worktree が別ディレクトリであることで自然に分離する。pnpm store / uv・npm キャッシュは全 worker で共有 (高速化) |
+| ブランチ | ローカルに無ければ base-ref (省略時 `HEAD`) から新規作成、あれば既存をチェックアウト。branch 名は英数始まり `[A-Za-z0-9 . _ / -]` のみ |
+
+依存が worktree 内に閉じるため、worker A と worker B が別バージョンのパッケージを
+入れても干渉しない (共有 named volume を 1 ブランチで使う `run.sh` 単体とは異なる)。
+全体方針は後述の「[依存パッケージの保存先](#依存パッケージの保存先-volume-分離)」を参照。
+
+### 注意
+
+- worktree は **コンテナ内で作成**される。ホスト git (2.43) は相対パス worktree
+  (`worktree.useRelativePaths`, git 2.48+) を持たず gitdir を絶対パスで記録するため、
+  `/workspace` を正準パスに統一して初めてコンテナ内で解決できる。よって **ホスト側の
+  git で worktree 内を操作したり `git worktree prune` を実行しない** (記録パス
+  `/workspace/...` はホストに存在せず prune 対象に見える)。誤 prune 防止に `worker.sh`
+  は `gc.worktreePruneExpire=never` を自動設定する。
+- worktree 内のファイルは IDE で閲覧・編集できるが、git 操作はコンテナ内
+  (worker / `shell.sh`) で行う (上記の理由でホスト git からは扱えない)。
+- `base` 省略時の `HEAD` は **main 側コンテナの現在チェックアウト**。意図したベース
+  (例 `main`) は明示するのが安全。
+- `/workspace` 直下の `node_modules` / `.venv` は **main 用の named volume**。worker は
+  起動時に worktree 内へ `cd` 済みなので通常は触れないが、`/workspace` 直下で
+  install すると main 側を書き換えてしまうので注意。
+- worker の依存は (`run.sh` の named volume と異なり) **ホストの `.git/.worktrees/<name>/`
+  配下に実体化**する。worktree が別ディレクトリであることで分離する設計で、`.git` 配下
+  ゆえ git 追跡されず、`worker.sh --remove` で worktree ごと回収される。
+- 後始末は `worker.sh --remove <branch>` で (中の依存ごと消える。branch は残る)。
+  **`--remove` は `--force` 相当で、worktree 内の未コミット変更も無警告で破棄する**
+  (worktree には常に untracked な依存が居るため非 force では消せない)。実装中の作業は
+  push / commit してから消すこと。`clean.sh` は一括リセット用途なので worktree には触れない。
+- **ホストリポ本体への副作用 (要注意)**: worker.sh は worktree 維持のため、外側の
+  プロジェクトの `.git` を初回起動時に書き換える。これらは `.claude-sandbox/` の外なので
+  `clean.sh` では戻らず、サンドボックスを消しても残る。
+  - `.git/config` に `gc.worktreePruneExpire=never` (ホスト git の誤 prune 防止)。
+  - `.git/info/exclude` に `node_modules` / `.venv` / `.worker-bundle` を、マーカー
+    (`# >>> worker.sh managed ... >>>` 〜 `# <<< ... <<<`) で囲んだ 1 ブロックとして追記。
+    これは **全 worktree (main 含む) で共有**されるため、配布先リポで入れ子の
+    `node_modules` 等を持つ場合は main 側の `git status` からも隠れる点に注意。
+  - 全 worker worktree を `--remove` した後、`worker.sh --reset` でこれらの変更を取り消せる
+    (worktree が残っている間は gc 保護を外せないため `--reset` は失敗する)。`--reset` は
+    上記マーカー区間だけを除去するので、ユーザーが元から持つ同名の除外行は巻き込まない。
 
 ## 設定ファイル: `sandbox.config`
 
@@ -415,7 +486,7 @@ docker compose --env-file sandbox.config down -v
 
 | パス | 役割 | commit? |
 |---|---|---|
-| `setup.sh` `run.sh` `shell.sh` `logs.sh` `doctor.sh` `copy-to.sh` `clean.sh` | エントリポイント | yes |
+| `setup.sh` `run.sh` `worker.sh` `shell.sh` `logs.sh` `doctor.sh` `copy-to.sh` `clean.sh` | エントリポイント | yes |
 | `git-pat.sh` | mode H 用 fine-grained PAT 発行支援 (ホストで実行) | yes |
 | `docker-compose.yml` `Dockerfile.agent` | 基盤 | yes |
 | `proxy/allowlist_addon.py` | mitmproxy addon | yes |
