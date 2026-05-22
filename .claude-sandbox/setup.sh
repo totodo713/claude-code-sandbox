@@ -214,15 +214,17 @@ detect_pkg_tool_node() {
 }
 
 # ---- Node パッケージマネージャの「バージョン」検出 (package.json packageManager) ----
-# "pnpm@8.15.0+sha512..." の @ 以降のバージョン部だけ返す (integrity hash は捨てる)。
-# 見つからなければ空 (Dockerfile 側で pnpm=latest / yarn=stable に既定)。古い Node を
-# 使う場合、latest の pnpm/yarn が Node とランタイム非互換になりやすいので、ここで
-# 固定版を拾えると corepack の build/実行が両立しやすい。
+# 引数 $1 = 確定済みのツール名 (pnpm/yarn)。"pnpm@8.15.0+sha512..." の @ 以降の
+# バージョン部だけ返す (integrity hash は捨てる)。packageManager のツール名が $1 と
+# 一致するときだけ返し、不一致なら空にする (lockfile やプロンプト上書きで決めた
+# ツールと、packageManager が指す別ツールの版を取り違えて pnpm@<yarn の版> のような
+# 不正な spec を作るのを防ぐ)。見つからなければ空 (Dockerfile 側で latest/stable に既定)。
 detect_pkg_tool_node_version() {
-  local repo_root v
+  local repo_root pm v
+  pm="$1"
   repo_root=$(cd "$SCRIPT_DIR/.." && pwd)
   [ -f "$repo_root/package.json" ] || { printf ""; return; }
-  v=$(grep -oE '"packageManager"[[:space:]]*:[[:space:]]*"[^"]+"' "$repo_root/package.json" 2>/dev/null \
+  v=$(grep -oE "\"packageManager\"[[:space:]]*:[[:space:]]*\"${pm}@[0-9]+(\.[0-9]+){0,2}" "$repo_root/package.json" 2>/dev/null \
        | grep -oE '@[0-9]+(\.[0-9]+){0,2}' | head -n1 | tr -d '@') || true
   printf "%s" "$v"
 }
@@ -274,6 +276,9 @@ gather_inputs() {
   PKG_TOOL_PYTHON="uv"
   PKG_TOOL_NODE="npm"
   PKG_TOOL_NODE_VERSION=""
+  # corepack の署名検証バイパスは安全側に倒し、対話では尋ねない。必要な人だけ
+  # 生成後の sandbox.config を手で 1/true/yes に編集する緊急避難スイッチ。
+  PKG_TOOL_NODE_ALLOW_UNSIGNED=""
   case ",${LANG_PACK}," in
     *,ruby,*)
       local default_ruby
@@ -293,7 +298,7 @@ gather_inputs() {
       # 拾ったバージョンを既定提示 (空なら latest/stable)。古い Node では固定推奨。
       case "$PKG_TOOL_NODE" in
         pnpm|yarn)
-          default_pkg_node_ver=$(detect_pkg_tool_node_version)
+          default_pkg_node_ver=$(detect_pkg_tool_node_version "$PKG_TOOL_NODE")
           PKG_TOOL_NODE_VERSION=$(ask "${PKG_TOOL_NODE} バージョン (package.json packageManager から検出、空=latest/stable)" "$default_pkg_node_ver")
           ;;
         *) PKG_TOOL_NODE_VERSION="" ;;
@@ -404,6 +409,7 @@ write_config() {
     -e "s|__PKG_TOOL_PYTHON__|${PKG_TOOL_PYTHON}|g" \
     -e "s|__PKG_TOOL_NODE__|${PKG_TOOL_NODE}|g" \
     -e "s|__PKG_TOOL_NODE_VERSION__|${PKG_TOOL_NODE_VERSION}|g" \
+    -e "s|__PKG_TOOL_NODE_ALLOW_UNSIGNED__|${PKG_TOOL_NODE_ALLOW_UNSIGNED}|g" \
     -e "s|__PASSTHROUGH_ENV__|${PASSTHROUGH_ENV}|g" \
     -e "s|__AGENT_USER_UID__|${AGENT_USER_UID}|g" \
     -e "s|__AGENT_USER_GID__|${AGENT_USER_GID}|g" \
@@ -647,6 +653,7 @@ load_config() {
   : "${PKG_TOOL_PYTHON:=uv}"
   : "${PKG_TOOL_NODE:=npm}"
   : "${PKG_TOOL_NODE_VERSION:=}"
+  : "${PKG_TOOL_NODE_ALLOW_UNSIGNED:=}"
   # mode 固有の必須値を検証・補完。sandbox.config を手で編集して mode を
   # 切り替えると、その mode で必要な値が空のままになることがあるため。
   case "$CLAUDE_AUTH_MODE" in
