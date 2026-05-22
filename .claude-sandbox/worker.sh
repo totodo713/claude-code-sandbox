@@ -40,6 +40,12 @@ cd "$SCRIPT_DIR"
 
 WORKTREE_ROOT="/workspace/.git/.worktrees"
 
+# .git/info/exclude へ追記する worker 管理行をマーカーで囲う。--reset はこの区間だけを
+# 完全一致で除去するので、ユーザーが元から持つ同名の除外行 (node_modules 等) を巻き込まない。
+# BOOT (追記) と cmd_reset (除去) の双方へ env で渡し、文字列の二重管理を避ける。
+EXCLUDE_MARK_BEGIN='# >>> worker.sh managed (worktree deps) >>>'
+EXCLUDE_MARK_END='# <<< worker.sh managed (worktree deps) <<<'
+
 usage() {
   cat <<'EOF'
 worker.sh — worktree 単位で隔離した worker claude をサンドボックスで起動する。
@@ -124,7 +130,8 @@ cmd_remove() {
 # worktree が残っていると gc 保護を外した瞬間にホスト git の prune 対象になるため、
 # 先に全 worker worktree を --remove させてから実行させる。
 cmd_reset() {
-  docker compose --env-file sandbox.config run --rm -T --no-deps -e WROOT="$WORKTREE_ROOT" agent bash -c '
+  docker compose --env-file sandbox.config run --rm -T --no-deps \
+    -e WROOT="$WORKTREE_ROOT" -e MARK_BEGIN="$EXCLUDE_MARK_BEGIN" -e MARK_END="$EXCLUDE_MARK_END" agent bash -c '
     set -e
     remaining=$(git -C /workspace worktree list --porcelain | sed -n "s/^worktree //p" | grep -F "$WROOT/" || true)
     if [ -n "$remaining" ]; then
@@ -140,12 +147,19 @@ cmd_reset() {
     excl=/workspace/.git/info/exclude
     if [ -f "$excl" ]; then
       tmp=$(mktemp)
-      grep -vxF -e node_modules -e .venv -e .worker-bundle "$excl" > "$tmp" || true
+      # マーカー区間 (MARK_BEGIN〜MARK_END) だけを完全一致で除去する。区間外の同名行
+      # (ユーザーが独自に追加した node_modules 等) には触れない。awk の完全一致 ($0==b)
+      # なので exclude 行のメタ文字 (.git の "." など) に振り回されない。
+      awk -v b="$MARK_BEGIN" -v e="$MARK_END" "
+        \$0==b {drop=1; next}
+        drop && \$0==e {drop=0; next}
+        !drop {print}
+      " "$excl" > "$tmp"
       if cmp -s "$excl" "$tmp"; then
-        echo "==> .git/info/exclude に worker の追記行なし (skip)"
+        echo "==> .git/info/exclude に worker 管理ブロックなし (skip)"
       else
         cat "$tmp" > "$excl"
-        echo "==> .git/info/exclude から node_modules / .venv / .worker-bundle を除去しました"
+        echo "==> .git/info/exclude の worker 管理ブロックを除去しました"
       fi
       rm -f "$tmp"
     fi
@@ -154,7 +168,7 @@ cmd_reset() {
   '
 }
 
-# コンテナ内 bootstrap。値は env (WT/BR/BASE/MODE) で渡し、スクリプト本文へは補間しない
+# コンテナ内 bootstrap。値は env (WT/BR/BASE/MODE/MARK_*) で渡し、スクリプト本文へは補間しない
 # (branch 名経由のシェルインジェクション防止)。本文に ' を含めないこと (単一引用符で囲うため)。
 # claude へ転送する引数は bash -c の位置引数 ("$@") で渡す (env 文字列結合と違いクォートを保てる)。
 BOOT='
@@ -168,9 +182,12 @@ exec 9>/workspace/.git/.worker-setup.lock
 flock 9
 git -C /workspace config gc.worktreePruneExpire never
 # 依存の保存先を git status から隠す (配布先 repo の .gitignore に依存しないため自前で)。
-for p in node_modules .venv .worker-bundle; do
-  grep -qxF "$p" /workspace/.git/info/exclude 2>/dev/null || echo "$p" >> /workspace/.git/info/exclude
-done
+# worker 管理行はマーカーで囲って 1 ブロックで追記し、--reset がこの区間だけを除去できる
+# ようにする (ユーザーが元から持つ同名の除外行を消さないため)。ブロック既存なら冪等に skip。
+excl=/workspace/.git/info/exclude
+if ! grep -qxF "$MARK_BEGIN" "$excl" 2>/dev/null; then
+  { echo "$MARK_BEGIN"; echo node_modules; echo .venv; echo .worker-bundle; echo "$MARK_END"; } >> "$excl"
+fi
 # 作業ツリーだけ消えた worktree の admin entry を掃除して自己回復する。--expire=now で
 # gc.worktreePruneExpire=never の影響を受けず確実に。生存 worktree の /workspace パスは
 # コンテナ内で実在するので誤 prune しない。
@@ -215,6 +232,7 @@ launch() {
   # 残り "$@" は claude への転送引数。bash -c の位置引数として渡し、BOOT 内で "$@" 展開する。
   exec docker compose --env-file sandbox.config run --rm -it \
     -e WT="$wt" -e BR="$branch" -e BASE="$base" -e MODE="$mode" \
+    -e MARK_BEGIN="$EXCLUDE_MARK_BEGIN" -e MARK_END="$EXCLUDE_MARK_END" \
     agent bash -c "$BOOT" worker "$@"
 }
 

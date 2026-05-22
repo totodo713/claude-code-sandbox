@@ -129,11 +129,13 @@ egress-proxy は 1 つを全 agent で共有し、agent コンテナだけを wo
   プロジェクトの `.git` を初回起動時に書き換える。これらは `.claude-sandbox/` の外なので
   `clean.sh` では戻らず、サンドボックスを消しても残る。
   - `.git/config` に `gc.worktreePruneExpire=never` (ホスト git の誤 prune 防止)。
-  - `.git/info/exclude` に `node_modules` / `.venv` / `.worker-bundle` を追記。これは
-    **全 worktree (main 含む) で共有**されるため、配布先リポで入れ子の `node_modules`
-    等を持つ場合は main 側の `git status` からも隠れる点に注意。
+  - `.git/info/exclude` に `node_modules` / `.venv` / `.worker-bundle` を、マーカー
+    (`# >>> worker.sh managed ... >>>` 〜 `# <<< ... <<<`) で囲んだ 1 ブロックとして追記。
+    これは **全 worktree (main 含む) で共有**されるため、配布先リポで入れ子の
+    `node_modules` 等を持つ場合は main 側の `git status` からも隠れる点に注意。
   - 全 worker worktree を `--remove` した後、`worker.sh --reset` でこれらの変更を取り消せる
-    (worktree が残っている間は gc 保護を外せないため `--reset` は失敗する)。
+    (worktree が残っている間は gc 保護を外せないため `--reset` は失敗する)。`--reset` は
+    上記マーカー区間だけを除去するので、ユーザーが元から持つ同名の除外行は巻き込まない。
 
 ## 設定ファイル: `sandbox.config`
 
